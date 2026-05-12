@@ -1,0 +1,39 @@
+[Unit]
+Description=Halo CE DDoS Monitor → Discord
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+
+# Required: your Discord webhook URL
+Environment="DISCORD_WEBHOOK=https://discord.com/api/webhooks/REPLACE_ME/REPLACE_ME"
+
+# Required: one entry per Halo server you run, format "port:Display Name"
+# Comma-separated, no quotes around names. Example with three servers:
+#   "HALO_SERVERS=2302:Public,2303:Scrims,2304:Test"
+Environment="HALO_SERVERS=2302:Server 1"
+
+# Optional: comma-separated systemd units to watch for crashes
+Environment="WATCHED_SERVICES=halo-server"
+
+# Optional: proxycheck.io API key (sign up at https://proxycheck.io/dashboard)
+# Without a key, free tier is 100 VPN lookups/day. With a key: 1000/day.
+# Environment="PROXYCHECK_KEY=your-key-here"
+
+# Optional: tweak detection thresholds (defaults shown)
+# Environment="PPS_THRESHOLD=3000"
+# Environment="BPS_THRESHOLD=8388608"
+# Environment="UNIQUE_IPS_THRESHOLD=40"
+
+Environment="PYTHONUNBUFFERED=1"
+
+ExecStart=/usr/bin/python3 /opt/halo-monitor/halo_ddos_monitor.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

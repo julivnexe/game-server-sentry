@@ -1,0 +1,25 @@
+# Operator-private data — NEVER commit
+players.log
+players.log.*
+*.log
+*.log.pos
+
+# Local env files / secrets
+.env
+.env.*
+*.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Backups
+*.bak
+*.bak.*
