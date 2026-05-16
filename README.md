@@ -55,6 +55,8 @@ What you get on a single VPS, no SaaS, no paid frontend:
 
 **The integration boundary is the CSV file.** Your game adapter writes rows; the bot does everything downstream. See [`docs/CSV_FORMAT.md`](docs/CSV_FORMAT.md) for the schema.
 
+The `auto-banner` arrow in that diagram is the most operationally risky piece of the stack — it can drop legitimate players. Before turning it on, read [`docs/AUTO_BANNER.md`](docs/AUTO_BANNER.md) for thresholds, TTL, unbanning procedure, and false-positive scenarios.
+
 ---
 
 ## Quick start
