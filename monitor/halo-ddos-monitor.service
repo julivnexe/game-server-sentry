@@ -10,13 +10,22 @@ User=root
 # Required: your Discord webhook URL
 Environment="DISCORD_WEBHOOK=https://discord.com/api/webhooks/REPLACE_ME/REPLACE_ME"
 
-# Required: one entry per Halo server you run, format "port:Display Name"
-# Comma-separated, no quotes around names. Example with three servers:
-#   "HALO_SERVERS=2302:Public,2303:Scrims,2304:Test"
-Environment="HALO_SERVERS=2302:Server 1"
+# Required: one entry per Halo server you run, format "port:Display Name[:max_players]"
+# Comma-separated, no quotes around names. Max defaults to 16 if omitted.
+# Example with three servers and per-server max:
+#   "HALO_SERVERS=2302:Public:8,2303:Scrims:4,2304:Test:16"
+Environment="HALO_SERVERS=2302:Server 1:16"
 
 # Optional: comma-separated systemd units to watch for crashes
 Environment="WATCHED_SERVICES=halo-server"
+
+# Optional: connect-command helper.
+# Public IP is auto-detected via icanhazip.com if PUBLIC_IP is unset.
+# SERVER_IPS overrides per port (use when servers live on different hosts).
+# SERVER_PASSWORDS embeds the join password into the connect command.
+# Environment="PUBLIC_IP=1.2.3.4"
+# Environment="SERVER_IPS=2302:1.2.3.4,2303:5.6.7.8"
+# Environment="SERVER_PASSWORDS=2303:scrim-pw"
 
 # Optional: proxycheck.io API key (sign up at https://proxycheck.io/dashboard)
 # Without a key, free tier is 100 VPN lookups/day. With a key: 1000/day.

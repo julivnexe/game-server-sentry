@@ -94,21 +94,91 @@ _service_state = {}
 
 
 def parse_servers(raw):
+    """Parse "port:name[:max],port:name[:max],..." into
+       {port: {"name": ..., "max": int}}. Max defaults to 16."""
     out = {}
     for entry in raw.split(","):
         entry = entry.strip()
         if not entry or ":" not in entry:
             continue
-        port_s, name = entry.split(":", 1)
+        bits = entry.split(":")
+        if len(bits) < 2:
+            continue
         try:
-            port = int(port_s.strip())
+            port = int(bits[0].strip())
         except ValueError:
             continue
-        out[port] = name.strip()
+        # Last segment is max if it parses as an int, else part of the name
+        max_players = 16
+        name_parts = bits[1:]
+        if len(name_parts) >= 2:
+            try:
+                max_players = int(name_parts[-1].strip())
+                name_parts = name_parts[:-1]
+            except ValueError:
+                pass
+        name = ":".join(s.strip() for s in name_parts)
+        out[port] = {"name": name, "max": max_players}
     return out
 
 
 SERVERS = parse_servers(HALO_SERVERS_RAW)
+SERVER_MAX = {info["name"]: info["max"] for info in SERVERS.values()}
+SERVER_PORT = {info["name"]: port for port, info in SERVERS.items()}
+
+# Live maxplayers per server, updated whenever the Lua side writes an
+# action="state" row with extra="maxplayers=N". Falls back to SERVER_MAX
+# (static env-derived value) for any server we haven't heard a heartbeat from.
+_server_max = dict(SERVER_MAX)
+
+# Optional per-server join password used to build the "connect" command.
+# Format: "port:password,port:password,...". Leave empty entry for no password.
+# Example: "SERVER_PASSWORDS=2312:your-password"
+SERVER_PASSWORDS_RAW = os.environ.get("SERVER_PASSWORDS", "")
+SERVER_PASSWORDS = {}
+for entry in SERVER_PASSWORDS_RAW.split(","):
+    entry = entry.strip()
+    if not entry or ":" not in entry:
+        continue
+    p, pw = entry.split(":", 1)
+    try:
+        SERVER_PASSWORDS[int(p.strip())] = pw.strip()
+    except ValueError:
+        pass
+
+# Public IP for building connect commands. Auto-detected on first use if unset.
+PUBLIC_IP = os.environ.get("PUBLIC_IP", "").strip()
+
+# Optional per-server IP override. Useful if you run servers across multiple
+# VPSes / hostnames. Format: "port:ip,port:ip,..."
+# If a port isn't listed here, the auto-detected PUBLIC_IP is used.
+SERVER_IPS_RAW = os.environ.get("SERVER_IPS", "")
+SERVER_IPS = {}
+for entry in SERVER_IPS_RAW.split(","):
+    entry = entry.strip()
+    if not entry or ":" not in entry:
+        continue
+    p, ip = entry.split(":", 1)
+    try:
+        SERVER_IPS[int(p.strip())] = ip.strip()
+    except ValueError:
+        pass
+
+
+def get_public_ip():
+    global PUBLIC_IP
+    if PUBLIC_IP:
+        return PUBLIC_IP
+    for url in ("https://icanhazip.com", "https://api.ipify.org", "https://ifconfig.me/ip"):
+        try:
+            r = requests.get(url, timeout=4)
+            ip = (r.text or "").strip().split("\n")[0]
+            if ip and ip.count(".") == 3:
+                PUBLIC_IP = ip
+                return PUBLIC_IP
+        except Exception:
+            continue
+    return None
 
 
 def detect_iface() -> str:
@@ -187,10 +257,12 @@ def current_players_from_log(server_filter=None):
         return [], set()
     active = {}
     try:
-        with open(PLAYER_LOG) as f:
+        with open(PLAYER_LOG, encoding="utf-8", errors="replace") as f:
             for line in f:
-                parts = line.strip().split(",", 5)
-                if len(parts) == 6:
+                parts = line.strip().split(",", 6)
+                if len(parts) == 7:
+                    ts, server, action, name, ip, hsh, _extra = parts
+                elif len(parts) == 6:
                     ts, server, action, name, ip, hsh = parts
                 elif len(parts) == 5:
                     ts, action, name, ip, hsh = parts
@@ -204,6 +276,8 @@ def current_players_from_log(server_filter=None):
                     for k in list(active.keys()):
                         if k[0] == server:
                             del active[k]
+                    continue
+                if action not in ("join", "leave"):
                     continue
                 key = (server, name, hsh)
                 if action == "join":
@@ -314,12 +388,70 @@ def post_join_leave(server, action, name, ip_with_port=None, returning=False):
         org = info.get("org") or "unknown"
         vtype = info.get("vpn_type") or "Proxy"
         fields.append({"name": f"⚠️ {vtype} detected", "value": org, "inline": False})
-    fields.append({"name": "Players online", "value": f"{count}/16", "inline": True})
+    max_players = _server_max.get(server, SERVER_MAX.get(server, 16))
+    fields.append({"name": "Players online", "value": f"{count}/{max_players}", "inline": True})
+
+    # On joins only: append a click-to-copy connect command for this server.
+    if action == "join":
+        port = SERVER_PORT.get(server)
+        if port:
+            host = SERVER_IPS.get(port) or get_public_ip()
+            if host:
+                pw = SERVER_PASSWORDS.get(port, "")
+                cmd = f"connect {host}:{port}" + (f" {pw}" if pw else "")
+                fields.append({
+                    "name": "Connect",
+                    "value": f"```\n{cmd}\n```",
+                    "inline": False,
+                })
     post({
         "username": "SoplonBOT",
         "embeds": [{
             "title": title,
             "color": color,
+            "fields": fields,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }],
+    })
+
+
+def parse_command_extra(extra: str):
+    """Parse the Lua-side extra payload for action='command'.
+    Format: 'lvl=<n>|cmd=<text>'. Returns (level:str, command:str)."""
+    lvl, cmd = "0", ""
+    for part in (extra or "").split("|", 1):
+        if part.startswith("lvl="):
+            lvl = part[4:] or "0"
+        elif part.startswith("cmd="):
+            cmd = part[4:]
+    return lvl, cmd
+
+
+def post_command(server, name, ip_with_port, extra):
+    """Post a Discord embed when a player issues an in-game / command."""
+    lvl, cmd = parse_command_extra(extra)
+    if not cmd:
+        return
+    info = lookup_ip_info(ip_with_port)
+    ip_clean = (ip_with_port or "").split(":", 1)[0] or "?"
+    fields = [
+        {"name": "Server",    "value": server, "inline": False},
+        {"name": "Player",    "value": name or "?", "inline": True},
+        {"name": "IP",        "value": f"`{ip_clean}`", "inline": True},
+        {"name": "Admin lvl", "value": str(lvl), "inline": True},
+    ]
+    if info.get("country_label"):
+        fields.append({"name": "Country", "value": info["country_label"], "inline": True})
+    if info.get("is_suspicious"):
+        org = info.get("org") or "unknown"
+        vtype = info.get("vpn_type") or "Proxy"
+        fields.append({"name": f"⚠️ {vtype} detected", "value": org, "inline": False})
+    fields.append({"name": "Command", "value": f"```\n{cmd[:900]}\n```", "inline": False})
+    post({
+        "username": "SoplonBOT",
+        "embeds": [{
+            "title": "🛠️ Command used",
+            "color": 16753920,
             "fields": fields,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }],
@@ -369,20 +501,33 @@ def rebuild_active_players():
     if not os.path.exists(PLAYER_LOG):
         return
     try:
-        with open(PLAYER_LOG) as f:
+        with open(PLAYER_LOG, encoding="utf-8", errors="replace") as f:
             for line in f:
-                parts = line.strip().split(",", 5)
-                if len(parts) == 6:
+                parts = line.strip().split(",", 6)
+                if len(parts) == 7:
+                    _ts, server, action, name, ip, hsh, extra = parts
+                elif len(parts) == 6:
                     _ts, server, action, name, ip, hsh = parts
+                    extra = ""
                 elif len(parts) == 5:
                     _ts, action, name, ip, hsh = parts
                     server = ""
+                    extra = ""
                 else:
                     continue
                 if action == "startup":
                     for k in list(_active_players):
                         if k[0] == server:
                             _active_players.discard(k)
+                    continue
+                if action == "state":
+                    if extra.startswith("maxplayers="):
+                        try:
+                            _server_max[server] = int(extra.split("=", 1)[1])
+                        except (ValueError, IndexError):
+                            pass
+                    continue
+                if action not in ("join", "leave"):
                     continue
                 ip_clean = (ip or "").split(":", 1)[0]
                 if action == "join" and ip_clean:
@@ -408,21 +553,35 @@ def process_new_log_entries():
     if pos >= size:
         return
     try:
-        with open(PLAYER_LOG) as f:
+        with open(PLAYER_LOG, encoding="utf-8", errors="replace") as f:
             f.seek(pos)
             for line in f:
                 line = line.rstrip("\n")
                 if not line:
                     continue
-                parts = line.split(",", 5)
-                if len(parts) != 6:
+                parts = line.split(",", 6)
+                if len(parts) == 7:
+                    _ts, server, action, name, ip, hsh, extra = parts
+                elif len(parts) == 6:
+                    _ts, server, action, name, ip, hsh = parts
+                    extra = ""
+                else:
                     continue
-                _ts, server, action, name, ip, hsh = parts
                 if action == "startup":
                     # Drop in-memory ghosts for this server. No Discord post.
                     for k in list(_active_players):
                         if k[0] == server:
                             _active_players.discard(k)
+                    continue
+                if action == "state":
+                    if extra.startswith("maxplayers="):
+                        try:
+                            _server_max[server] = int(extra.split("=", 1)[1])
+                        except (ValueError, IndexError):
+                            pass
+                    continue
+                if action == "command":
+                    post_command(server, name, ip, extra)
                     continue
                 if action not in ("join", "leave"):
                     continue
@@ -458,11 +617,11 @@ def main():
     print(f"[+] monitoring iface={iface} servers={SERVERS}")
 
     states = {}
-    for port, name in SERVERS.items():
+    for port, info in SERVERS.items():
         ensure_iptables_counter(port)
         pkts, bts = read_port_counter(port)
         states[port] = {
-            "name": name,
+            "name": info["name"],
             "last_pkts": pkts,
             "last_bytes": bts,
             "ip_window": deque(),
@@ -489,7 +648,7 @@ def main():
             _service_state[svc] = "unknown"
     print(f"[+] watching services: {_service_state}")
 
-    server_list = "\n".join(f"`{n}` → UDP/{p}" for p, n in SERVERS.items())
+    server_list = "\n".join(f"`{info['name']}` → UDP/{p} (max {info['max']})" for p, info in SERVERS.items())
     post({
         "username": "SoplonBOT",
         "embeds": [{

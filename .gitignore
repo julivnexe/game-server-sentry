@@ -23,3 +23,9 @@ Thumbs.db
 # Backups
 *.bak
 *.bak.*
+
+# Claude Code session state
+.claude/
+
+# Staging dirs used by import scripts
+_staging/

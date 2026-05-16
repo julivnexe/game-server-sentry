@@ -1,181 +1,165 @@
-# SoplonBOT — Halo CE Discord Notifier & DDoS Monitor
+# SoplonBOT — Self-Hosted Game Server DDoS Defense + Discord Notifier
 
-A small monitoring stack for Halo CE dedicated servers running SAPP on Linux + Wine.
+Free, self-hosted observability and DDoS protection for **any** UDP/TCP game server. Originally built for Halo CE; the per-game integration is now a pluggable adapter, with Halo CE shipped as the reference implementation.
 
-Posts to a Discord webhook on:
-- Player joins / leaves (with country flag, IP, VPN detection, and a "🔄 returning" marker)
-- PPS / bandwidth / connection-flood spikes per server port
-- Watched systemd services going down or coming back up
+What you get on a single VPS, no SaaS, no paid frontend:
 
-Works around the common SAPP-under-Wine quirk where `http_client()` is stubbed: the SAPP Lua side just appends to a local CSV, and a Python daemon tails that file and does the actual Discord delivery.
-
----
-
-## Repo layout
-
-```
-halo-soplon-bot/
-├── halo_ddos_monitor.py         # The Python monitor daemon
-├── halo-ddos-monitor.service    # systemd unit (copy to /etc/systemd/system/)
-├── lua/
-│   ├── discord_notify.lua       # SAPP: writes join/leave CSV
-│   ├── discord_welcome.lua      # Optional: posts an invite message on join
-│   └── lo3_vote.lua             # Optional: unanimous in-chat lo3 vote
-├── README.md
-├── LICENSE
-└── .gitignore
-```
-
-`players.log` (the on-disk forensics CSV) is intentionally `.gitignore`d. It contains real player IPs and CD-key hashes — never commit it.
+- 🛡️ **Layered DDoS defense** — kernel hardening, per-source rate limits, public reputation feeds (FireHOL/Spamhaus), auto-banned attacker subnets via a Prometheus-driven trigger.
+- 📣 **Discord notifications** — player joins/leaves with country flag + VPN detection, in-game command snitching, traffic spike alerts, watched-service crash/recovery.
+- 📊 **Prometheus + Grafana** stack auto-provisioned for dashboards and metrics.
+- 🎮 **Game-agnostic CSV protocol** — adapt to any game by emitting a 7-column CSV that the monitor tails. Halo CE adapter (SAPP Lua) included; templates for other engines in [`games/`](games/).
 
 ---
 
-## Requirements
-
-- Ubuntu 22.04 (or similar) host running `haloceded.exe` under Wine.
-- SAPP 10.2.1 CE (or compatible).
-- Root / sudo on the host.
-- Python 3.8+ with `python3-requests`:
-  ```bash
-  sudo apt install -y python3-requests iptables
-  ```
-
----
-
-## Installation
-
-### 1. Drop the Python monitor in place
-
-```bash
-sudo mkdir -p /opt/halo-monitor
-sudo install -m 755 halo_ddos_monitor.py /opt/halo-monitor/halo_ddos_monitor.py
-sudo touch /opt/halo-monitor/players.log
-```
-
-### 2. Configure the systemd unit
-
-Edit `halo-ddos-monitor.service` and set:
-
-- `DISCORD_WEBHOOK` — your webhook URL (Server Settings → Integrations → Webhooks in Discord).
-- `HALO_SERVERS` — comma-separated `port:Display Name` pairs, one per Halo server you run. Example for three servers:
-  ```
-  Environment="HALO_SERVERS=2302:Public,2303:Scrims,2304:Test"
-  ```
-  The display name appears in every Discord embed as the "Server" field, and is the value the Lua script writes to `players.log`, so it must match `SERVER_NAME` in each `discord_notify.lua` copy.
-- `WATCHED_SERVICES` — comma-separated systemd unit names to watch for crash/recovery (e.g. `halo-server,halo-server-3`).
-- *(optional)* `PROXYCHECK_KEY` — free signup at https://proxycheck.io/dashboard. Without it you get 100 VPN lookups/day from the free tier; with it, 1000/day.
-
-Then install and start it:
-
-```bash
-sudo install -m 644 halo-ddos-monitor.service /etc/systemd/system/halo-ddos-monitor.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now halo-ddos-monitor
-sudo systemctl status halo-ddos-monitor
-```
-
-You should see a green **🟢 Halo monitor online** embed in Discord with the list of watched ports.
-
-### 3. Install the SAPP Lua side
-
-For each Halo server you run, place `lua/discord_notify.lua` into that instance's SAPP lua directory (typically `cg/sapp/lua/`), edit the top:
-
-```lua
-local SERVER_NAME = "Server 1"   -- must match HALO_SERVERS in the systemd unit
-```
-
-Then add this line to that instance's `cg/sapp/init.txt`:
+## What's in this repo
 
 ```
-lua_load discord_notify
-```
-
-Restart the Halo server (or hot-load via rcon: `lua_load discord_notify`).
-
-### 4. (Optional) Bonus Lua scripts
-
-- `lua/discord_welcome.lua` — sends a private chat message to every joining player. Edit `WELCOME_MESSAGE` at the top. Add `lua_load discord_welcome` to `cg/sapp/init.txt`.
-- `lua/lo3_vote.lua` — unanimous lo3 vote in chat. Pairs with a SAPP commands.txt alias (see file header). Add `lua_load lo3_vote` to `cg/sapp/init.txt`.
-
-### 5. Make iptables counter rules persistent (optional but recommended)
-
-The monitor inserts ACCEPT rules at startup for each watched port (they exist purely so we can read the packet/byte counters). To survive reboots:
-
-```bash
-sudo apt install -y iptables-persistent
-sudo iptables-save | sudo tee /etc/iptables/rules.v4
+.
+├── monitor/              Standalone Python daemon (legacy single-process deploy)
+├── observability/        Docker compose stack — netmon-alert + prometheus +
+│                         grafana + node-exporter + auto-banner.
+│                         Production-grade deployment goes here.
+├── firewall/             iptables/ipset hardening scripts
+│                          - reputation feed updater (FireHOL/Spamhaus)
+│                          - GeoIP whitelist updater (optional, disabled by default)
+├── games/                Per-game integrations. CSV-emitting adapters.
+│   └── halo-ce/          Reference: SAPP Lua scripts
+└── docs/                 CSV protocol + architecture
 ```
 
 ---
 
-## Configuration knobs
+## How it works
 
-All set via the systemd unit's `Environment=` lines:
+```
+   game server  ─────────────┐
+   (Halo, MC, Source, etc)  │  writes CSV
+                             ▼
+                    /var/log/gameserver/players.log
+                             │
+                             │ tail
+                             ▼
+                      netmon-alert ───┬─► Discord webhook
+                       (Python bot)   │
+                                      ├─► /metrics (Prometheus scrape)
+                                      ▼
+                                  prometheus
+                                      │
+                                      ▼
+                                  auto-banner
+                                      │  on PPS spike → tcpdump
+                                      │  → group by /24 → ipset add
+                                      ▼
+                               iptables drops attacker subnets
+```
 
-| Variable | Default | Purpose |
+**The integration boundary is the CSV file.** Your game adapter writes rows; the bot does everything downstream. See [`docs/CSV_FORMAT.md`](docs/CSV_FORMAT.md) for the schema.
+
+---
+
+## Quick start
+
+### 1. Pick a deployment mode
+
+| Mode | Files | Best for |
 |---|---|---|
-| `DISCORD_WEBHOOK` | *(required)* | Webhook URL |
-| `HALO_SERVERS` | `2302:Server 1` | `port:name` list |
-| `WATCHED_SERVICES` | `halo-server` | systemd units for liveness watch |
-| `PROXYCHECK_KEY` | *(empty)* | proxycheck.io API key |
-| `PPS_THRESHOLD` | `3000` | inbound packets/sec to alert on |
-| `BPS_THRESHOLD` | `8388608` | bytes/sec to alert on (8 Mbps) |
-| `UNIQUE_IPS_THRESHOLD` | `40` | unique src IPs in window to flood-alert |
-| `UNIQUE_IPS_WINDOW_SEC` | `10` | flood-detection window |
-| `ALERT_COOLDOWN_SEC` | `60` | minimum gap between alerts of same kind |
-| `POLL_SEC` | `2` | main loop interval |
-| `IFACE` | *(autodetect)* | override outbound interface name |
-| `PLAYER_LOG` | `/opt/halo-monitor/players.log` | CSV path |
-| `LOG_POS_FILE` | `/opt/halo-monitor/players.log.pos` | tail bookmark |
+| **Docker stack** (recommended) | [`observability/`](observability/) | Production. Auto-bans, dashboards, metrics. ~5 minutes to deploy. |
+| **Standalone daemon** | [`monitor/`](monitor/) | Minimal. systemd unit + a Python script. No Docker. |
 
----
+Both consume the same `players.log` CSV from your game adapter — the two modes are interchangeable on the bot side.
 
-## Privacy model
+### 2. Pick (or write) a game adapter
 
-`players.log` contains real player IPs and CD-key hashes. It's used internally for:
-- Country / VPN lookup on join.
-- Returning-visitor detection (matched by IP).
-- Filtering known-player IPs out of DDoS attacker IP lists, so a laggy player isn't doxed as an attacker.
+- **Halo CE:** drop [`games/halo-ce/discord_notify.lua`](games/halo-ce/discord_notify.lua) into your SAPP `lua/` dir, add `lua_load discord_notify` to `init.txt`. See [`games/halo-ce/README.md`](games/halo-ce/README.md).
+- **Other games:** see [`games/README.md`](games/README.md) for the adapter contract and example sketches (Minecraft plugin, SourceMod, Garry's Mod, etc).
 
-CD-key hashes are **never** sent to Discord. IPs and country flags **are** sent (in join/leave embeds and flood alerts). If you'd rather keep IPs off Discord:
+### 3. Run the firewall hardening (optional but strongly recommended)
 
-- Edit `post_join_leave()` in `halo_ddos_monitor.py` and remove the `IP` field from the `fields` list.
-- The country flag and VPN flag can stay since neither leaks the IP itself.
-
-Keep your `#logs` Discord channel locked to mods/admins.
-
----
-
-## Troubleshooting
-
-**Monitor starts but no embeds appear.**
-Test the webhook directly from the VPS:
-```bash
-curl -X POST -H 'Content-Type: application/json' \
-  -d '{"content":"test"}' "$DISCORD_WEBHOOK"
 ```
-If Discord receives it, the webhook is fine. Check `journalctl -u halo-ddos-monitor -f` for errors.
+sudo bash firewall/update_reputation.sh   # populate halo-reputation ipset
+# add iptables rules per firewall/README.md
+```
 
-**Join/leave embeds aren't appearing but DDoS alerts work.**
-The Lua script isn't writing to `players.log`. Check:
-- The script is in the right `cg/sapp/lua/` for the instance you joined.
-- `lua_load discord_notify` is in `cg/sapp/init.txt`.
-- `SERVER_NAME` in the Lua matches what you set in `HALO_SERVERS`.
-- The Halo process can write to `/opt/halo-monitor/` (since you run as root, it can).
+See [`firewall/README.md`](firewall/README.md) for the full DDoS-hardening recipe (sysctl, iptables, ipset, rate limits).
 
-**Map changes spam "Player joined" for everyone.**
-The monitor dedupes via an in-memory `_active_players` set. It seeds from log replay at startup, so during the *first* map change after a restart you may see duplicate joins for already-present players. Subsequent map changes are clean.
+---
 
-**Embeds say a player is from "Country X" but I know they're from Y.**
-proxycheck.io's accuracy is good but not perfect. Mobile and VPN traffic in particular often geolocates to the carrier's headquarters, not the user. There's no fix for this short of a paid geo provider.
+## Defense layers, ranked by effectiveness
 
-**The 🔄 returning marker doesn't appear for someone I know joined before.**
-The marker matches on **IP**, not name or hash. Dynamic IPs, VPN exit rotation, and mobile-cellular changes all break the match. False negatives are expected; false positives don't happen (unrelated households almost never share an IP).
+| Layer | Tool | What it catches |
+|---|---|---|
+| 1 | kernel sysctl (`tcp_syncookies=1`, `rp_filter=2`) | Spoofed-source amplification floods |
+| 2 | iptables INPUT chain | Specific bad IPs, per-source-IP rate limit, per-port rate limit |
+| 3 | ipset `halo-banlist` | Auto-banned attacker subnets (24h TTL) populated by `auto-banner` from live PPS spikes |
+| 4 | ipset `halo-reputation` | Known-malicious IPs from FireHOL Level 1 + Spamhaus DROP/EDROP (~4.6K CIDRs, daily refresh) |
+| 5 | ipset `halo-allowlist` | Verified players from `players.log` (bypass rate limits) |
+
+Single-VPS realistic ceiling: ~5–10 Gbps. Beyond that, you need upstream filtering (your hosting provider's DDoS protection appliance — see [`docs/UPSTREAM.md`](docs/UPSTREAM.md)).
+
+---
+
+## Privacy posture
+
+- `players.log` (which contains real IPs and CD-key hashes for Halo) is `.gitignore`d. **Never commit it.**
+- CD-key hashes are never sent to Discord.
+- IPs and country flags are sent by default — disable by editing `post_join_leave()` in the bot.
+- VPN-using players are first-class: there is no VPN-blocking layer in this stack. Real-time VPN detection (proxycheck.io) is informational only, shown as an `⚠️ VPN detected` field in the embed, never used to gate access.
+
+---
+
+## Compatible games
+
+Any game that lets you run a dedicated server **and** exposes one of: a plugin API, RCON, parseable server logs, or a status query protocol. The bot only consumes a CSV file — anything that can produce that file works.
+
+Legend: ✅ = reference adapter shipped in this repo · 🟢 = plugin API I've verified exists, easy adapter · 🟡 = workable via log-scraping or RCON polling, more brittle.
+
+| Game | Status | Integration surface |
+|---|---|---|
+| Halo: Combat Evolved (PC) | ✅ | [SAPP](https://opencarnage.net/index.php?/topic/31-sapp/) Lua — `EVENT_JOIN` / `EVENT_LEAVE` / `EVENT_COMMAND` |
+| Minecraft Java (Spigot / Paper / Purpur) | 🟢 | Bukkit API — `PlayerJoinEvent`, `PlayerQuitEvent`, `PlayerCommandPreprocessEvent` |
+| Minecraft Bedrock | 🟡 | Log scraper on BDS, or use a [WaterdogPE](https://github.com/WaterdogPE/WaterdogPE) proxy with plugins |
+| Counter-Strike 2 / CS:GO / TF2 / L4D2 / DOD:S | 🟢 | [SourceMod](https://www.sourcemod.net/) — `OnClientConnected`, `OnClientDisconnect`, `say` cmd hooks |
+| Garry's Mod | 🟢 | GLua hooks — `PlayerInitialSpawn`, `PlayerDisconnected`, `PlayerSay` |
+| Rust (Facepunch) | 🟢 | [uMod / Oxide](https://umod.org/) plugin — `OnPlayerConnected`, `OnPlayerDisconnected`, `OnUserChat` |
+| 7 Days to Die | 🟡 | Mod via Harmony, or `telnet`-based remote admin output parsing |
+| Terraria (TShock) | 🟢 | [TShock](https://tshock.co/) plugin API — `PlayerHooks.PlayerPostLogin`, `ServerApi.Hooks.ServerLeave` |
+| ARK: Survival Evolved | 🟡 | [ArkServerAPI](https://gameservershub.com/forums/resources/categories/ark-server-api.6/) (community framework) |
+| Project Zomboid | 🟡 | Lua server events (`OnConnected`, `OnDisconnect`) |
+| Valheim | 🟡 | [BepInEx](https://github.com/BepInEx/BepInEx) server-side mod or log scraping |
+| Squad / Post Scriptum / Insurgency: Sandstorm | 🟡 | RCON player-list polling or log scraping |
+| Killing Floor 2 | 🟡 | WebAdmin scraping or a server-side Mutator |
+| Mordhau | 🟡 | RCON log scraping |
+| Quake III / Wolfenstein ET / RTCW | 🟡 | Mod QVM hooks, or `getstatus` UDP query polling |
+| Unreal Tournament series | 🟡 | UScript ServerActor |
+| Any GameSpy-protocol game (Halo, UT, BF1942, MW2 IW4M, etc.) | 🟡 | `\status\` UDP query poller — works without server-side install |
+| Any game with RCON | 🟡 | Poll `status` / `listplayers` every 5–10 s, diff and emit events |
+| Any game with parseable join/leave log lines | 🟡 | `tail -F` log scraper |
+
+**Caveat:** This list is "could be made to work with sensible effort." Of these, only Halo CE has a shipping adapter in this repo today. The 🟢 entries are weekend projects (~50–100 lines each), the 🟡 ones are weekend-and-a-half because log/RCON parsing is finicky. PRs welcome — see [`games/README.md`](games/README.md).
+
+Games that **won't** work cleanly: anything where you can't run your own dedicated server (Valorant, Fortnite, modern CoD, Apex, etc.), or where the server is a closed binary with no plugin API and no useful log output (some Korean/Chinese MMO clients).
+
+---
+
+## Adding your own game
+
+The bot only cares about one thing: a CSV file at `players.log` with rows like:
+
+```
+2026-05-15T19:46:31Z,My Server,join,playerName,1.2.3.4:51234,optional_hash,
+2026-05-15T19:48:12Z,My Server,leave,playerName,1.2.3.4:51234,optional_hash,
+2026-05-15T19:49:01Z,My Server,command,playerName,1.2.3.4:51234,optional_hash,lvl=3|cmd=/help
+2026-05-15T19:49:00Z,My Server,state,,,,maxplayers=16
+```
+
+If your game can be made to emit those lines (via plugin, log scraper, RCON poller, gamespy query, etc), the bot handles everything else — Discord embeds, DDoS auto-ban, Prometheus metrics, the works.
+
+See [`docs/CSV_FORMAT.md`](docs/CSV_FORMAT.md) for the full schema, and [`games/README.md`](games/README.md) for adapter design notes and patterns for common engines.
 
 ---
 
 ## License
 
-MIT — see `LICENSE`.
+MIT — see [`LICENSE`](LICENSE).
 
-This project is unaffiliated with Microsoft, Bungie, 343 Industries, or the SAPP author. You bring your own copy of Halo CE / SAPP.
+The Halo CE reference adapter is unaffiliated with Microsoft, Bungie, 343 Industries, or the SAPP author. Bring your own copy of Halo CE / SAPP.
