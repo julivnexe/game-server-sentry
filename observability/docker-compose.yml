@@ -180,10 +180,12 @@ services:
       prometheus:
         condition: service_healthy
     ports:
-      # Exposed publicly so you can hit it at http://<vps-ip>:3000.
-      # Lock this behind a firewall, VPN, or reverse-proxy with TLS for
-      # real production. UFW/iptables rule recommended.
-      - "3000:3000"
+      # Bound to loopback only. Reach Grafana via SSH local-forward
+      # (`ssh -L 3000:127.0.0.1:3000 <vps>`) or place a TLS-terminating
+      # reverse proxy in front. The old "0.0.0.0:3000" exposure had no
+      # corresponding TLS or auth-rate-limiting and made the admin
+      # password the only thing between attackers and the dashboard.
+      - "127.0.0.1:3000:3000"
     environment:
       - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-changeme}
