@@ -77,6 +77,8 @@ See [`observability/STACK_README.md`](observability/STACK_README.md) for the ful
 - **Halo CE:** drop [`games/halo-ce/discord_notify.lua`](games/halo-ce/discord_notify.lua) into your SAPP `lua/` dir, add `lua_load discord_notify` to `init.txt`. See [`games/halo-ce/README.md`](games/halo-ce/README.md).
 - **Other games:** see [`games/README.md`](games/README.md) for the adapter contract and example sketches (Minecraft plugin, SourceMod, Garry's Mod, etc).
 
+> **Context for non-modders:** Halo CE (the PC version of Halo: Combat Evolved, 2003) has no first-class plugin API. The SAPP runtime is a community-maintained Lua-based modding framework that adds event hooks. `game-server-sentry` doesn't depend on SAPP — only the Halo CE adapter does. Other games will use their own plugin systems, log scrapers, or RCON pollers via the CSV contract.
+
 ### 3. Run the firewall hardening (optional but strongly recommended)
 
 ```
