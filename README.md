@@ -1,6 +1,5 @@
 # Game Server Sentry — Self-Hosted DDoS Defense + Discord Notifier
 
-> Originally released as **SoplonBOT** for Halo CE. Repo and project renamed to reflect the broader scope.
 
 Free, self-hosted observability and DDoS protection for **any** UDP/TCP game server. Originally built for Halo CE; the per-game integration is now a pluggable adapter, with Halo CE shipped as the reference implementation.
 
