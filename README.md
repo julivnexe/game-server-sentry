@@ -16,16 +16,15 @@ What you get on a single VPS, no SaaS, no paid frontend:
 
 ```
 .
-├── monitor/              Standalone Python daemon (legacy single-process deploy)
 ├── observability/        Docker compose stack — netmon-alert + prometheus +
 │                         grafana + node-exporter + auto-banner.
-│                         Production-grade deployment goes here.
+│                         This is the deployment.
 ├── firewall/             iptables/ipset hardening scripts
 │                          - reputation feed updater (FireHOL/Spamhaus)
 │                          - GeoIP whitelist updater (optional, disabled by default)
 ├── games/                Per-game integrations. CSV-emitting adapters.
 │   └── halo-ce/          Reference: SAPP Lua scripts
-└── docs/                 CSV protocol + architecture
+└── docs/                 CSV protocol + architecture + ops notes
 ```
 
 ---
@@ -60,14 +59,16 @@ What you get on a single VPS, no SaaS, no paid frontend:
 
 ## Quick start
 
-### 1. Pick a deployment mode
+### 1. Deploy the stack
 
-| Mode | Files | Best for |
-|---|---|---|
-| **Docker stack** (recommended) | [`observability/`](observability/) | Production. Auto-bans, dashboards, metrics. ~5 minutes to deploy. |
-| **Standalone daemon** | [`monitor/`](monitor/) | Minimal. systemd unit + a Python script. No Docker. |
+```bash
+cd observability
+cp .env.example .env
+$EDITOR .env                 # fill in DISCORD_WEBHOOK and game ports
+docker compose up -d
+```
 
-Both consume the same `players.log` CSV from your game adapter — the two modes are interchangeable on the bot side.
+See [`observability/STACK_README.md`](observability/STACK_README.md) for the full walkthrough (env vars, healthchecks, persistence, Grafana provisioning). If you used to run the legacy single-process daemon, see [`docs/MIGRATION.md`](docs/MIGRATION.md).
 
 ### 2. Pick (or write) a game adapter
 
