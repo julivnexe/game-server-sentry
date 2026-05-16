@@ -88,10 +88,18 @@ def load_player_ip_whitelist():
     try:
         with open(PLAYER_LOG, encoding="utf-8", errors="replace") as f:
             for line in f:
-                parts = line.strip().split(",", 5)
-                if len(parts) != 6:
+                parts = line.strip().split(",", 7)
+                # Accept any schema v1 row shape: legacy 6-field, current 7-field
+                # (unversioned), or 8-field (explicit schema_version trailer).
+                # We only need action, ip — positions are stable.
+                if len(parts) == 8:
+                    _ts, _server, action, _name, ip, _hsh, _extra, _ver = parts
+                elif len(parts) == 7:
+                    _ts, _server, action, _name, ip, _hsh, _extra = parts
+                elif len(parts) == 6:
+                    _ts, _server, action, _name, ip, _hsh = parts
+                else:
                     continue
-                _ts, _server, action, _name, ip, _hsh = parts
                 if action != "join":
                     continue
                 ip_clean = (ip or "").split(":", 1)[0]

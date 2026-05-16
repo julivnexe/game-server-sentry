@@ -8,7 +8,7 @@ What you get on a single VPS, no SaaS, no paid frontend:
 - 🛡️ **Layered DDoS defense** — kernel hardening, per-source rate limits, public reputation feeds (FireHOL/Spamhaus), auto-banned attacker subnets via a Prometheus-driven trigger.
 - 📣 **Discord notifications** — player joins/leaves with country flag + VPN detection, in-game command snitching, traffic spike alerts, watched-service crash/recovery.
 - 📊 **Prometheus + Grafana** stack auto-provisioned for dashboards and metrics.
-- 🎮 **Game-agnostic CSV protocol** — adapt to any game by emitting a 7-column CSV that the monitor tails. Halo CE adapter (SAPP Lua) included; templates for other engines in [`games/`](games/).
+- 🎮 **Game-agnostic CSV protocol** — adapt to any game by emitting an 8-column CSV (schema `v1`) that the monitor tails. Halo CE adapter (SAPP Lua) included; templates for other engines in [`games/`](games/).
 
 ---
 
@@ -150,10 +150,10 @@ Games that **won't** work cleanly: anything where you can't run your own dedicat
 The bot only cares about one thing: a CSV file at `players.log` with rows like:
 
 ```
-2026-05-15T19:46:31Z,My Server,join,playerName,1.2.3.4:51234,optional_hash,
-2026-05-15T19:48:12Z,My Server,leave,playerName,1.2.3.4:51234,optional_hash,
-2026-05-15T19:49:01Z,My Server,command,playerName,1.2.3.4:51234,optional_hash,lvl=3|cmd=/help
-2026-05-15T19:49:00Z,My Server,state,,,,maxplayers=16
+2026-05-15T19:46:31Z,My Server,join,playerName,1.2.3.4:51234,optional_hash,,v1
+2026-05-15T19:48:12Z,My Server,leave,playerName,1.2.3.4:51234,optional_hash,,v1
+2026-05-15T19:49:01Z,My Server,command,playerName,1.2.3.4:51234,optional_hash,lvl=3|cmd=/help,v1
+2026-05-15T19:49:00Z,My Server,state,,,,maxplayers=16,v1
 ```
 
 If your game can be made to emit those lines (via plugin, log scraper, RCON poller, gamespy query, etc), the bot handles everything else — Discord embeds, DDoS auto-ban, Prometheus metrics, the works.

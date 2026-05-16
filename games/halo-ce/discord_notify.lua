@@ -32,6 +32,7 @@ api_version = "1.12.0.0"
 local SERVER_NAME       = "Server 1"
 local PLAYER_LOG        = "/opt/halo-monitor/players.log"
 local STATE_INTERVAL_MS = 60000
+local SCHEMA_VERSION    = "v1"  -- docs/CSV_FORMAT.md
 -- ============================================
 
 local function csv_safe(s)
@@ -44,10 +45,11 @@ local function write_log(action, name, ip, hash, extra)
     local f = io.open(PLAYER_LOG, "a")
     if not f then return end
     local ts = os.date("!%Y-%m-%dT%H:%M:%SZ")
-    -- 7 fields: ts,server,action,name,ip,hash,extra
-    f:write(string.format("%s,%s,%s,%s,%s,%s,%s\n",
+    -- 8 fields: ts,server,action,name,ip,hash,extra,schema_version
+    f:write(string.format("%s,%s,%s,%s,%s,%s,%s,%s\n",
         ts, SERVER_NAME, action,
-        csv_safe(name), ip or "", hash or "", csv_safe(extra)))
+        csv_safe(name), ip or "", hash or "", csv_safe(extra),
+        SCHEMA_VERSION))
     f:close()
 end
 

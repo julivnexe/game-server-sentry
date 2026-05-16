@@ -259,8 +259,12 @@ def current_players_from_log(server_filter=None):
     try:
         with open(PLAYER_LOG, encoding="utf-8", errors="replace") as f:
             for line in f:
-                parts = line.strip().split(",", 6)
-                if len(parts) == 7:
+                parts = line.strip().split(",", 7)
+                if len(parts) == 8:
+                    # v1+: 8 fields with trailing schema_version
+                    ts, server, action, name, ip, hsh, _extra, _ver = parts
+                elif len(parts) == 7:
+                    # legacy unversioned v1: treat as v1
                     ts, server, action, name, ip, hsh, _extra = parts
                 elif len(parts) == 6:
                     ts, server, action, name, ip, hsh = parts
@@ -481,8 +485,10 @@ def rebuild_active_players():
     try:
         with open(PLAYER_LOG, encoding="utf-8", errors="replace") as f:
             for line in f:
-                parts = line.strip().split(",", 6)
-                if len(parts) == 7:
+                parts = line.strip().split(",", 7)
+                if len(parts) == 8:
+                    _ts, server, action, name, ip, hsh, extra, _ver = parts
+                elif len(parts) == 7:
                     _ts, server, action, name, ip, hsh, extra = parts
                 elif len(parts) == 6:
                     _ts, server, action, name, ip, hsh = parts
@@ -540,8 +546,10 @@ def process_new_log_entries():
                 line = line.rstrip("\n")
                 if not line:
                     continue
-                parts = line.split(",", 6)
-                if len(parts) == 7:
+                parts = line.split(",", 7)
+                if len(parts) == 8:
+                    _ts, server, action, name, ip, hsh, extra, _ver = parts
+                elif len(parts) == 7:
                     _ts, server, action, name, ip, hsh, extra = parts
                 elif len(parts) == 6:
                     _ts, server, action, name, ip, hsh = parts
