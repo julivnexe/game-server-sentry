@@ -162,6 +162,17 @@ See [`docs/CSV_FORMAT.md`](docs/CSV_FORMAT.md) for the full schema, and [`games/
 
 ---
 
+## Running tests
+
+```
+python -m pip install pytest
+python -m pytest tests/
+```
+
+The suite covers the highest-risk surfaces: CSV parser (all row types + backward-compat shapes + malformed rows), auto-banner trigger threshold and /24 grouping logic, and the bogon-filter on the reputation feed (the loopback case that took an hour to diagnose in prod). 53 tests, runs in under a second, no docker or network required.
+
+---
+
 ## License
 
 MIT — see [`LICENSE`](LICENSE).
