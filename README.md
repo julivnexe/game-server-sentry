@@ -106,15 +106,27 @@ Single-VPS realistic ceiling: ~5–10 Gbps. Beyond that, you need upstream filte
 
 ## Operational footprint
 
-Numbers from the live deployment running this stack 24/7:
+Numbers from the live deployment running this stack 24/7 on a Vultr VPS (Ubuntu 22.04, single vCPU):
 
-- Player join → Discord post latency: // TODO: measure (target: under 2s end-to-end)
-- Auto-banner trigger → ipset add: // TODO: measure
-- Current /24s in halo-banlist: // TODO: read live
-- Reputation feed size: ~4,600 CIDRs (FireHOL Level 1 + Spamhaus DROP/EDROP)
-- Full-stack CPU at idle: // TODO: read from Grafana
-- Full-stack memory: // TODO: read from Grafana
-- Uptime since last redeploy: // TODO: read from Grafana
+- Current entries in `halo-banlist`: **42**
+- Reputation feed size: **4,631 CIDRs** (FireHOL Level 1 + Spamhaus DROP/EDROP)
+- Full-stack CPU at idle: **~0.8%** combined across 5 containers
+- Full-stack memory: **~153 MB resident** (grafana 56, prometheus 31, netmon-alert 30, auto-banner 27, node-exporter 8)
+- Grafana exposure: bound to `127.0.0.1`, accessed via SSH local-forward (originally was publicly exposed — see security note below)
+- Uptime since last redeploy: // TODO: re-measure after stack has been stable for >24h
+- Player join → Discord post latency: // TODO: instrument with a histogram metric
+
+### Security notes
+
+During the documentation pass for this README, I noticed Grafana was bound to `0.0.0.0:3000` and UFW allowed port 3000 from anywhere — meaning the dashboard was publicly reachable. Prometheus was correctly bound to `127.0.0.1` but Grafana wasn't, which made the protection on Prometheus theater (anyone could log into Grafana and query Prometheus through its datasource).
+
+Fixed by rebinding the Grafana container to `127.0.0.1:3000:3000` in the compose file and removing the UFW rule for `3000/tcp`. Access is now via SSH local-forward only:
+
+```
+ssh -L 3000:127.0.0.1:3000 <vps>   # then open http://localhost:3000
+```
+
+Lesson: consistency across services matters more than getting one service right. If you bind one service to localhost for safety, audit every other service in the same compose file at the same time.
 
 ---
 
