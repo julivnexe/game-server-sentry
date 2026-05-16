@@ -102,6 +102,20 @@ Single-VPS realistic ceiling: ~5–10 Gbps. Beyond that, you need upstream filte
 
 ---
 
+## Operational footprint
+
+Numbers from the live deployment running this stack 24/7:
+
+- Player join → Discord post latency: // TODO: measure (target: under 2s end-to-end)
+- Auto-banner trigger → ipset add: // TODO: measure
+- Current /24s in halo-banlist: // TODO: read live
+- Reputation feed size: ~4,600 CIDRs (FireHOL Level 1 + Spamhaus DROP/EDROP)
+- Full-stack CPU at idle: // TODO: read from Grafana
+- Full-stack memory: // TODO: read from Grafana
+- Uptime since last redeploy: // TODO: read from Grafana
+
+---
+
 ## Privacy posture
 
 - `players.log` (which contains real IPs and CD-key hashes for Halo) is `.gitignore`d. **Never commit it.**
