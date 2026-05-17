@@ -11,7 +11,6 @@ In many SAPP-under-Wine builds, the built-in `http_client()` function is stubbed
 | File | Purpose |
 |---|---|
 | `discord_notify.lua` | Required. Hooks `EVENT_JOIN` / `EVENT_LEAVE` / `EVENT_COMMAND`, writes to `players.log`. Also emits a periodic `state` row with current `sv_maxplayers`. |
-| `discord_welcome.lua` | Optional. Sends a private chat message to every joining player. |
 | `stats_tracker.lua`   | Optional. Per-IP K/D/A/captures. Hooks `EVENT_DIE` / `EVENT_DAMAGE_APPLICATION` / `EVENT_SCORE`, writes to `events.log`. Exposes `/stats`, `/top`, `/fragger`, `/capper`, `/rank` chat commands. VPN-flagged IPs are logged but excluded from the leaderboard (filtering is Python-side via ProxyCheck.io). |
 
 ## Install
@@ -26,7 +25,6 @@ For each Halo server instance:
 3. Append to that instance's `cg/sapp/init.txt`:
    ```
    lua_load discord_notify
-   lua_load discord_welcome
    lua_load stats_tracker
    ```
 4. Restart the Halo server (or hot-load via rcon: `lua_load <name>`).

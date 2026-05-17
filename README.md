@@ -17,7 +17,7 @@ One repo, one VPS, no SaaS, no paid frontend. What you get:
 If you run your own Halo Custom Edition dedicated server, you've probably hit at least one of these problems:
 
 - Some kid floods your server with junk traffic and crashes it for everyone.
-- You have no idea who's playing right now unless you alt-tab into Halo.
+- You have no idea who's currently playing on your server without booting up Halo yourself and joining to check.
 - The server quietly dies at 3 AM and you find out next morning when people DM you asking why.
 - There's no scoreboard that survives between games — you can't see who the actual top players are over time.
 
@@ -111,9 +111,8 @@ All five containers should say `running`.
 
 ### Step 6 — Install the SAPP scripts on your Halo server
 
-Find your Halo server's SAPP lua folder (usually `cg/sapp/lua/` inside your Halo install) and drop these three files in:
+Find your Halo server's SAPP lua folder (usually `cg/sapp/lua/` inside your Halo install) and drop these two files in:
 - `sapp/discord_notify.lua`
-- `sapp/discord_welcome.lua`  *(optional — sends a welcome message to joining players)*
 - `sapp/stats_tracker.lua`
 
 Open each one in a text editor and find the line near the top:
@@ -125,7 +124,6 @@ Change `"Server 1"` to **exactly** match the name you put in `HALO_SERVERS` in y
 Then add these lines to your Halo server's `cg/sapp/init.txt`:
 ```
 lua_load discord_notify
-lua_load discord_welcome
 lua_load stats_tracker
 ```
 
