@@ -1,6 +1,6 @@
 # Halo CE Command Center
 
-A full-stack operations toolkit for a self-hosted Halo: Combat Evolved (PC) dedicated server running under SAPP. Built for and tested on a Vultr VPS running two Halo CE instances 24/7.
+A full-stack operations toolkit for a self-hosted Halo Custom Edition dedicated server running under SAPP. Built for and tested on a Vultr VPS running two Halo CE instances 24/7.
 
 One repo, one VPS, no SaaS, no paid frontend. What you get:
 
@@ -79,7 +79,7 @@ See [`observability/STACK_README.md`](observability/STACK_README.md) for the ful
 
 Drop the Lua files from [`sapp/`](sapp/) into your Halo CE instance's `cg/sapp/lua/` directory and add the matching `lua_load` lines to `cg/sapp/init.txt`. See [`sapp/README.md`](sapp/README.md) for the per-script details (server-name config, paths, in-game commands).
 
-> **Context for non-modders:** Halo CE (the PC version of Halo: Combat Evolved, 2003) has no first-class plugin API. [SAPP](https://opencarnage.net/index.php?/topic/31-sapp/) is a community-maintained Lua-based modding framework that adds event hooks to the stock dedicated server. Without SAPP these scripts have nothing to attach to.
+> **Context for non-modders:** Halo Custom Edition (released 2004) is a free standalone PC client built on top of the original Halo: Combat Evolved engine, designed specifically to support custom maps and community modding. It has no first-class plugin API — [SAPP](https://opencarnage.net/index.php?/topic/31-sapp/) is a community-maintained Lua-based modding framework that adds event hooks to the stock dedicated server. Without SAPP these scripts have nothing to attach to.
 
 ### 3. Run the firewall hardening (optional but strongly recommended)
 
