@@ -14,6 +14,7 @@ This file-based design has a nice side effect: it's reused as the integration bo
 |---|---|
 | `discord_notify.lua` | Required. Hooks `EVENT_JOIN` / `EVENT_LEAVE` / `EVENT_COMMAND`, writes CSV. Also emits a periodic `state` row with current `sv_maxplayers`. |
 | `discord_welcome.lua` | Optional. Sends a private chat message to every joining player. |
+| `stats_tracker.lua` | Optional. Tracks per-IP K/D/A/captures, writes events to `/opt/halo-monitor/events.log` for the bot to ingest into SQLite. Exposes `/stats`, `/top`, `/fragger`, `/capper`, `/rank` chat commands. VPN-flagged IPs are logged but excluded from the leaderboard (filtering is Python-side via ProxyCheck.io). |
 
 ## Install
 
