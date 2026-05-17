@@ -1,14 +1,14 @@
-# Game Server Sentry — Self-Hosted DDoS Defense + Discord Notifier
+# Halo CE Command Center
 
+A full-stack operations toolkit for a self-hosted Halo: Combat Evolved (PC) dedicated server running under SAPP. Built for and tested on a Vultr VPS running two Halo CE instances 24/7.
 
-Free, self-hosted observability and DDoS protection for **any** UDP/TCP game server. Originally built for Halo CE; the per-game integration is now a pluggable adapter, with Halo CE shipped as the reference implementation.
-
-What you get on a single VPS, no SaaS, no paid frontend:
+One repo, one VPS, no SaaS, no paid frontend. What you get:
 
 - 🛡️ **Layered DDoS defense** — kernel hardening, per-source rate limits, public reputation feeds (FireHOL/Spamhaus), auto-banned attacker subnets via a Prometheus-driven trigger.
 - 📣 **Discord notifications** — player joins/leaves with country flag + VPN detection, in-game command snitching, traffic spike alerts, watched-service crash/recovery.
 - 📊 **Prometheus + Grafana** stack auto-provisioned for dashboards and metrics.
-- 🎮 **Game-agnostic CSV protocol** — adapt to any game by emitting an 8-column CSV (schema `v1`) that the monitor tails. Halo CE adapter (SAPP Lua) included; templates for other engines in [`games/`](games/).
+- 🎯 **Stat tracker with KDA leaderboard** — per-IP kills/deaths/assists/captures, in-game `/stats`/`/top`/`/fragger`/`/capper`/`/rank` commands, mirrored to Discord slash commands. VPN-flagged IPs are logged but excluded from the public leaderboard.
+- 🎮 **SAPP Lua scripts** — drop-in scripts that wire all the event hooks into the bot's CSV protocol.
 
 ---
 
@@ -22,8 +22,9 @@ What you get on a single VPS, no SaaS, no paid frontend:
 ├── firewall/             iptables/ipset hardening scripts
 │                          - reputation feed updater (FireHOL/Spamhaus)
 │                          - GeoIP whitelist updater (optional, disabled by default)
-├── games/                Per-game integrations. CSV-emitting adapters.
-│   └── halo-ce/          Reference: SAPP Lua scripts
+├── sapp/                 SAPP Lua scripts that run inside the Halo CE
+│                         dedicated server. They write events to CSV/log
+│                         files the bot tails.
 └── docs/                 CSV protocol + architecture + ops notes
 ```
 
@@ -32,16 +33,18 @@ What you get on a single VPS, no SaaS, no paid frontend:
 ## How it works
 
 ```
-   game server  ─────────────┐
-   (Halo, MC, Source, etc)  │  writes CSV
-                             ▼
-                    /var/log/gameserver/players.log
+   Halo CE dedicated server (haloceded + SAPP under Wine)
+                │  SAPP Lua scripts append to:
+                ▼
+                /opt/halo-monitor/players.log    (joins / leaves / commands)
+                /opt/halo-monitor/events.log     (kills / deaths / assists / caps)
                              │
                              │ tail
                              ▼
-                      netmon-alert ───┬─► Discord webhook
-                       (Python bot)   │
+                      netmon-alert ───┬─► Discord webhook  +  /stats /top /fragger /capper /rank
+                       (Python bot)   │       slash commands query the SQLite stats DB
                                       ├─► /metrics (Prometheus scrape)
+                                      ├─► SQLite stats DB (kills/deaths/assists/caps per IP)
                                       ▼
                                   prometheus
                                       │
@@ -53,9 +56,9 @@ What you get on a single VPS, no SaaS, no paid frontend:
                                iptables drops attacker subnets
 ```
 
-**The integration boundary is the CSV file.** Your game adapter writes rows; the bot does everything downstream. See [`docs/CSV_FORMAT.md`](docs/CSV_FORMAT.md) for the schema.
+**The integration boundary is the CSV/log files.** SAPP appends rows; the bot does everything downstream. See [`docs/CSV_FORMAT.md`](docs/CSV_FORMAT.md) for the schema.
 
-The `auto-banner` arrow in that diagram is the most operationally risky piece of the stack — it can drop legitimate players. Before turning it on, read [`docs/AUTO_BANNER.md`](docs/AUTO_BANNER.md) for thresholds, TTL, unbanning procedure, and false-positive scenarios.
+The `auto-banner` arrow is the most operationally risky piece — it can drop legitimate players. Before turning it on, read [`docs/AUTO_BANNER.md`](docs/AUTO_BANNER.md).
 
 ---
 
@@ -66,18 +69,17 @@ The `auto-banner` arrow in that diagram is the most operationally risky piece of
 ```bash
 cd observability
 cp .env.example .env
-$EDITOR .env                 # fill in DISCORD_WEBHOOK and game ports
+$EDITOR .env                 # fill in DISCORD_WEBHOOK and Halo ports
 docker compose up -d
 ```
 
 See [`observability/STACK_README.md`](observability/STACK_README.md) for the full walkthrough (env vars, healthchecks, persistence, Grafana provisioning). If you used to run the legacy single-process daemon, see [`docs/MIGRATION.md`](docs/MIGRATION.md).
 
-### 2. Pick (or write) a game adapter
+### 2. Install the SAPP scripts
 
-- **Halo CE:** drop [`games/halo-ce/discord_notify.lua`](games/halo-ce/discord_notify.lua) into your SAPP `lua/` dir, add `lua_load discord_notify` to `init.txt`. See [`games/halo-ce/README.md`](games/halo-ce/README.md).
-- **Other games:** see [`games/README.md`](games/README.md) for the adapter contract and example sketches (Minecraft plugin, SourceMod, Garry's Mod, etc).
+Drop the Lua files from [`sapp/`](sapp/) into your Halo CE instance's `cg/sapp/lua/` directory and add the matching `lua_load` lines to `cg/sapp/init.txt`. See [`sapp/README.md`](sapp/README.md) for the per-script details (server-name config, paths, in-game commands).
 
-> **Context for non-modders:** Halo CE (the PC version of Halo: Combat Evolved, 2003) has no first-class plugin API. The SAPP runtime is a community-maintained Lua-based modding framework that adds event hooks. `game-server-sentry` doesn't depend on SAPP — only the Halo CE adapter does. Other games will use their own plugin systems, log scrapers, or RCON pollers via the CSV contract.
+> **Context for non-modders:** Halo CE (the PC version of Halo: Combat Evolved, 2003) has no first-class plugin API. [SAPP](https://opencarnage.net/index.php?/topic/31-sapp/) is a community-maintained Lua-based modding framework that adds event hooks to the stock dedicated server. Without SAPP these scripts have nothing to attach to.
 
 ### 3. Run the firewall hardening (optional but strongly recommended)
 
@@ -87,6 +89,42 @@ sudo bash firewall/update_reputation.sh   # populate halo-reputation ipset
 ```
 
 See [`firewall/README.md`](firewall/README.md) for the full DDoS-hardening recipe (sysctl, iptables, ipset, rate limits).
+
+---
+
+## Stat tracker (KDA leaderboard)
+
+`sapp/stats_tracker.lua` hooks `EVENT_DIE`, `EVENT_DAMAGE_APPLICATION`, and `EVENT_SCORE` to log every kill, death, assist, and CTF flag capture to `/opt/halo-monitor/events.log`. The Python bot ingests that file into a SQLite database keyed by player IP.
+
+**KDA formula:** `(kills + assists) / max(1, deaths)`, shown to one decimal.
+
+### In-game commands
+
+| Command | What it shows |
+|---|---|
+| `/stats`   | The caller's own K / D / A / C and KDA |
+| `/top`     | Top 5 players by KDA (alias of `/fragger`) |
+| `/fragger` | Top 5 players by KDA |
+| `/capper`  | Top 5 players by flag captures |
+| `/rank`    | The caller's rank among all tracked players |
+
+### Discord commands
+
+The same data is exposed via Discord slash commands posted by the bot:
+
+| Slash | What it shows |
+|---|---|
+| `/stats <player>` | K/D/A/C and KDA for the named player (or yourself if linked) |
+| `/top`            | Top 5 by KDA, posted as a Discord embed |
+| `/fragger`        | Alias of `/top` |
+| `/capper`         | Top 5 by captures |
+| `/rank <player>`  | Rank for the named player |
+
+The SQLite DB is shared between in-game and Discord paths — there's only one source of truth.
+
+### VPN posture
+
+On first sight of a new IP, the bot queries [ProxyCheck.io](https://proxycheck.io/) (free tier, 1000 lookups/day). VPN-flagged IPs are still logged to the events file and counted in their own personal `/stats`, but they're excluded from the public leaderboard so players using a VPN for legitimate privacy reasons don't lose visibility against non-VPN players. You can disable the VPN check entirely in the bot config.
 
 ---
 
@@ -132,16 +170,10 @@ Lesson: consistency across services matters more than getting one service right.
 
 ## Privacy posture
 
-- `players.log` (which contains real IPs and CD-key hashes for Halo) is `.gitignore`d. **Never commit it.**
+- `players.log`, `events.log`, and the SQLite stats DB (which contain real IPs and CD-key hashes) are `.gitignore`d. **Never commit them.**
 - CD-key hashes are never sent to Discord.
 - IPs and country flags are sent by default — disable by editing `post_join_leave()` in the bot.
-- VPN-using players are first-class: there is no VPN-blocking layer in this stack. Real-time VPN detection (proxycheck.io) is informational only, shown as an `⚠️ VPN detected` field in the embed, never used to gate access.
-
----
-
-## Supported games
-
-Halo CE has a shipping reference adapter. The CSV protocol is designed to extend to any game with a plugin API, RCON, or parseable logs — see [`docs/SUPPORTED_GAMES.md`](docs/SUPPORTED_GAMES.md) for the current compatibility matrix and [`docs/CSV_FORMAT.md`](docs/CSV_FORMAT.md) for the schema you'd target when writing a new adapter.
+- VPN-using players are first-class: there is no VPN-blocking layer in this stack. Real-time VPN detection (ProxyCheck.io) is informational only — shown as an `⚠️ VPN detected` field in the embed and used to keep the public KDA leaderboard fair, never used to gate access.
 
 ---
 
@@ -160,4 +192,4 @@ The suite covers the highest-risk surfaces: CSV parser (all row types + backward
 
 MIT — see [`LICENSE`](LICENSE).
 
-The Halo CE reference adapter is unaffiliated with Microsoft, Bungie, 343 Industries, or the SAPP author. Bring your own copy of Halo CE / SAPP.
+This project is unaffiliated with Microsoft, Bungie, 343 Industries, or the SAPP author. Bring your own copy of Halo CE / SAPP.

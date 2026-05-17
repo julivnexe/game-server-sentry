@@ -1,6 +1,6 @@
 # `players.log` — schema spec (v1)
 
-This is the integration boundary between game adapters and the bot. Treat it like an API.
+This is the integration boundary between the SAPP Lua scripts (which write) and the Python bot (which reads). Treat it like an API.
 
 **Current version:** `v1`.
 
@@ -17,7 +17,7 @@ A row is comma-separated, terminated by `\n`, encoded UTF-8.
 | 5 | `ip:port`       | `ip` or `ip:port`, IPv4             | conditional | Empty for `state` / `startup`. |
 | 6 | `hash`          | opaque per-player ID                | conditional | CD-key hash, Steam ID, account UUID — whatever your game has. Empty allowed. **Never** sent to Discord. |
 | 7 | `extra`         | action-specific payload             | yes (may be empty) | See per-row format below. |
-| 8 | `schema_version`| string, e.g. `v1`                   | optional (legacy rows omit it; treated as `v1`) | Added for forward compatibility. New adapters MUST emit it. |
+| 8 | `schema_version`| string, e.g. `v1`                   | optional (legacy rows omit it; treated as `v1`) | Added for forward compatibility. New writers MUST emit it. |
 
 7-field rows (no `schema_version`) are parsed as `v1` for backward compatibility. **New writers must emit 8 fields with `v1` as the last.**
 
@@ -76,7 +76,7 @@ Both keys required. `admin_level` is `0` for unprivileged players. `command_text
 maxplayers=<n>
 ```
 
-Emit on adapter load, on periodic heartbeat (≥ every 60 s recommended), and on detected runtime change (e.g. `sv_maxplayers <n>` or its alias). Game adapters that can't observe max-player changes should at least emit the boot value once.
+Emit on script load, on periodic heartbeat (≥ every 60 s recommended), and on detected runtime change (e.g. `sv_maxplayers <n>` or its alias).
 
 ### `startup`
 
@@ -92,9 +92,9 @@ Emit on adapter load, on periodic heartbeat (≥ every 60 s recommended), and on
 
 ## Escaping
 
-**No commas, newlines, or carriage returns anywhere except as field separators / row terminators.** The repo deliberately does **not** implement RFC 4180 double-quote escaping; the cost in adapter complexity (every plugin language needs a quoting routine) outweighs the convenience of letting `,` appear in names.
+**No commas, newlines, or carriage returns anywhere except as field separators / row terminators.** The repo deliberately does **not** implement RFC 4180 double-quote escaping — the complexity isn't worth letting `,` appear in player names.
 
-Adapter responsibility: before writing a field, replace any of `,`, `\n`, `\r` with a space (or any non-comma character). The reference Halo CE Lua adapter uses:
+Before writing a field, the Lua scripts replace any of `,`, `\n`, `\r` with a space:
 
 ```lua
 local function csv_safe(s)
@@ -102,9 +102,9 @@ local function csv_safe(s)
 end
 ```
 
-The bot's parser does **not** un-escape. Whatever the adapter wrote is what shows up in the Discord embed.
+The bot's parser does **not** un-escape. Whatever the Lua wrote is what shows up in the Discord embed.
 
-UTF-8 is the expected encoding. The bot decodes with `errors='replace'` so a stray invalid byte in a player name renders as `�` rather than crashing the parser, but adapters should avoid producing invalid sequences.
+UTF-8 is the expected encoding. The bot decodes with `errors='replace'` so a stray invalid byte in a player name renders as `�` rather than crashing the parser.
 
 ## Append-only
 
@@ -133,37 +133,6 @@ Forward-compatible changes that **do not** trigger a version bump:
 
 ## Where the bot reads from
 
-Default path: `/opt/halo-monitor/players.log` (carried over from the original Halo CE deployment). Override via the `PLAYER_LOG` environment variable in `observability/.env` for any other game.
+Default path: `/opt/halo-monitor/players.log`. Override via the `PLAYER_LOG` environment variable in `observability/.env` if needed.
 
 The bookmark file lives next to the log file with a `.pos` suffix: `players.log.pos`.
-
-## Minimal adapter skeleton
-
-Pseudocode for any game with `onJoin` / `onLeave` / `onCommand` hooks:
-
-```
-SCHEMA_VERSION = "v1"
-LOG_PATH       = "/opt/halo-monitor/players.log"
-SERVER_NAME    = "My Server"
-
-def write(action, name="", ip="", hash="", extra=""):
-    ts    = utc_now_iso_z()
-    name  = csv_safe(name)
-    extra = csv_safe(extra)
-    with open(LOG_PATH, "a") as f:
-        f.write(f"{ts},{SERVER_NAME},{action},{name},{ip},{hash},{extra},{SCHEMA_VERSION}\n")
-
-def on_load():
-    write("startup")
-    write("state", extra=f"maxplayers={read_max_from_config()}")
-    schedule_periodic(60_seconds,
-        lambda: write("state", extra=f"maxplayers={read_max()}"))
-
-def on_join(player):    write("join",    player.name, player.ip, player.hash)
-def on_leave(player):   write("leave",   player.name, player.ip, player.hash)
-def on_command(player, cmd):
-    write("command", player.name, player.ip, player.hash,
-          extra=f"lvl={player.admin_level}|cmd={cmd}")
-```
-
-That's the whole contract.
