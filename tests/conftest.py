@@ -24,4 +24,4 @@ def pytest_configure(config):
     # if a test does decide to import a bot module.
     os.environ.setdefault("DISCORD_WEBHOOK", "https://example.invalid/test")
     os.environ.setdefault("HALO_SERVERS", "2312:Test Server:4")
-    os.environ.setdefault("PLAYER_LOG", "/tmp/sentry_test_players.log")
+    os.environ.setdefault("PLAYER_LOG", "/tmp/halo_test_players.log")
