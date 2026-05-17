@@ -12,6 +12,160 @@ One repo, one VPS, no SaaS, no paid frontend. What you get:
 
 ---
 
+## Wait, what does this actually do? (the plain-English version)
+
+If you run your own Halo Custom Edition dedicated server, you've probably hit at least one of these problems:
+
+- Some kid floods your server with junk traffic and crashes it for everyone.
+- You have no idea who's playing right now unless you alt-tab into Halo.
+- The server quietly dies at 3 AM and you find out next morning when people DM you asking why.
+- There's no scoreboard that survives between games — you can't see who the actual top players are over time.
+
+**This project fixes all of that.** Once it's set up, your VPS will:
+
+1. **Watch for attackers and auto-block them.** When someone tries to flood your server, the firewall figures out where it's coming from and bans them for 24 hours. You don't have to do anything.
+2. **Ping your Discord every time someone joins or leaves.** With their country flag, whether they're using a VPN, and their player count. So you (and your community) actually know who's around.
+3. **Track Kills, Deaths, Assists, and Flag Captures for every player.** Stored per-IP, so people get credit even if they change names. Type `/top` in chat and you see the leaderboard. Same data is available as Discord slash commands.
+4. **Alert you when the server crashes** so you can restart it (or have it auto-restart).
+5. **Give you pretty Grafana graphs** of traffic and player counts if you want to nerd out.
+
+> **What's a VPS?** Short for "Virtual Private Server." It's just a computer you rent online — runs 24/7, has its own internet connection. Vultr, Linode, DigitalOcean, Hetzner, OVH all sell them. The cheapest tier (~$5/month, 1 CPU, 1 GB RAM) is enough for two Halo servers + everything in this repo.
+
+---
+
+## What you'll need before starting
+
+Honest checklist — gather these first:
+
+- **A VPS** running Ubuntu 22.04 or similar (any cheap Linux VPS works). You need SSH access as either `root` or a user with `sudo`.
+- **Your own copy of Halo Custom Edition** with SAPP installed and a working dedicated server. This repo doesn't ship Halo itself — that's separate (see [`halo-vps-ansible`](https://github.com/julivnexe/halo-vps-ansible) for an automated way to set the Halo side up). If you already have a Halo server running on a VPS, you're good.
+- **A Discord server you own**, with permission to create a webhook. Server Settings → Integrations → Webhooks → "New Webhook" → copy the URL. That URL is the secret that lets the bot post messages.
+- **Some willingness to copy-paste commands into a terminal.** You don't need to know what they do — just paste and run.
+
+If you don't have a Halo server set up yet, do that first. The rest of this README assumes you can SSH into your VPS and your Halo server is running on at least one port.
+
+---
+
+## Installation — for normal humans
+
+This walkthrough assumes you have a VPS and a running Halo CE server. Replace `your-vps` with your VPS's IP or hostname.
+
+### Step 1 — Connect to your VPS
+
+```
+ssh your-username@your-vps
+```
+
+If that works, you're in. Everything from here happens on the VPS.
+
+### Step 2 — Install Docker (one-time)
+
+Copy-paste this:
+```
+curl -fsSL https://get.docker.com | sudo sh
+sudo usermod -aG docker $USER
+exit
+```
+
+Reconnect (the `exit` is important — your user needs to "see" Docker), then verify:
+```
+ssh your-username@your-vps
+docker ps
+```
+
+If that prints an empty table instead of an error, you're good.
+
+### Step 3 — Download this project
+
+```
+git clone https://github.com/julivnexe/Halo-CE-Command-Center.git
+cd Halo-CE-Command-Center
+```
+
+### Step 4 — Tell it your secrets
+
+```
+cd observability
+cp .env.example .env
+nano .env
+```
+
+You'll see a list of settings. The two that matter:
+- `DISCORD_WEBHOOK=` — paste the webhook URL you copied earlier
+- `HALO_SERVERS=` — list your Halo ports and server names, like `2310:My Cool Server:16,2312:My Scrim Server:8`. The format is `port:name:maxplayers`.
+
+Save (`Ctrl+O`, Enter, `Ctrl+X` in nano).
+
+### Step 5 — Start everything
+
+```
+docker compose up -d
+```
+
+Wait ~30 seconds. Then check it's healthy:
+```
+docker compose ps
+```
+
+All five containers should say `running`.
+
+### Step 6 — Install the SAPP scripts on your Halo server
+
+Find your Halo server's SAPP lua folder (usually `cg/sapp/lua/` inside your Halo install) and drop these three files in:
+- `sapp/discord_notify.lua`
+- `sapp/discord_welcome.lua`  *(optional — sends a welcome message to joining players)*
+- `sapp/stats_tracker.lua`
+
+Open each one in a text editor and find the line near the top:
+```lua
+local SERVER_NAME = "Server 1"
+```
+Change `"Server 1"` to **exactly** match the name you put in `HALO_SERVERS` in your `.env` file. If you have multiple Halo instances, each one needs its own copy of the scripts with the matching name.
+
+Then add these lines to your Halo server's `cg/sapp/init.txt`:
+```
+lua_load discord_notify
+lua_load discord_welcome
+lua_load stats_tracker
+```
+
+Restart your Halo server.
+
+### Step 7 — Test it
+
+Join your Halo server. Within a couple seconds you should see a Discord message: "*PlayerName* joined Server 1, 1/16 players." Leave the server — you should get a leave message.
+
+If you don't see anything in Discord:
+- Run `docker compose logs -f netmon-alert` and try joining again. Watch what it prints.
+- Check that your Halo server has write access to `/opt/halo-monitor/` on the VPS.
+- Make sure the `SERVER_NAME` in the Lua script exactly matches the name in `.env`.
+
+### Step 8 (optional) — Turn on the firewall hardening
+
+This is the DDoS protection layer. It's optional because it can theoretically block legit players if it misfires — but in practice it's been solid. Read [`docs/AUTO_BANNER.md`](docs/AUTO_BANNER.md) first so you know what it'll do, then:
+```
+sudo bash firewall/update_reputation.sh
+```
+See [`firewall/README.md`](firewall/README.md) for the full hardening recipe (iptables rules, rate limits, etc).
+
+---
+
+## How it works (also in plain English)
+
+The whole thing is built around one simple idea: **Halo writes events to a text file, and a small program watches the file.**
+
+1. When something happens in Halo (someone joins, kills someone, captures a flag, whatever), a SAPP Lua script writes one line to a log file. That's it — Halo's job is done.
+2. A Python program ("the bot") is constantly tailing that file. When it sees a new line, it figures out what kind of event it is and acts:
+   - "Someone joined" → post a Discord message + remember their IP
+   - "Someone got killed" → bump the killer's kill count in the database
+   - "Server PPS spiked" → grab packet captures + ban the source subnet
+3. Meanwhile, a firewall layer (separate from the bot) keeps a list of bad IPs and drops their packets before they ever reach Halo. The bot adds attackers to this list automatically.
+4. The Grafana dashboard reads metrics out of Prometheus, which scrapes them from the bot. That's where the live graphs come from.
+
+The reason it's split into pieces (Lua + Python + Prometheus + iptables) instead of one giant program: each piece does one thing well, and if one crashes, the others keep working. The bot can die and your Halo server keeps running. Halo can crash and the bot keeps watching for it to come back. The firewall doesn't care if either is up — it just drops the packets it's told to drop.
+
+---
+
 ## What's in this repo
 
 ```
