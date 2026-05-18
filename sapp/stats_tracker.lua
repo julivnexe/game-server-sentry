@@ -30,6 +30,7 @@ api_version = "1.12.0.0"
 local SERVER_NAME       = "Server 1"
 local EVENT_LOG         = "/opt/halo-monitor/events.log"
 local LEADERBOARD_PATH  = "/opt/halo-monitor/stats/leaderboard.txt"   -- sorted by KDA desc
+local FRAGGERS_PATH     = "/opt/halo-monitor/stats/fraggers.txt"       -- sorted by raw kills desc
 local CAPPERS_PATH      = "/opt/halo-monitor/stats/cappers.txt"        -- sorted by captures desc
 local PLAYER_STATS_DIR  = "/opt/halo-monitor/stats/player"
 local SCHEMA_VERSION    = "v1"
@@ -215,14 +216,21 @@ local function read_leaderboard(path)
     return rows
 end
 
+-- Responses use say() so they appear in the player's CHAT log (persists
+-- ~10 seconds before scrolling) rather than rprint() which goes to the
+-- 1-second console overlay.
+local function tell(PlayerIndex, msg)
+    say(PlayerIndex, msg)
+end
+
 local function cmd_stats(PlayerIndex)
     local ip = strip_port(get_var(PlayerIndex, "$ip"))
     local s = read_player_stats(ip)
     if not s then
-        rprint(PlayerIndex, "No stats recorded yet. Play a few rounds.")
+        tell(PlayerIndex, "No stats recorded yet. Play a few rounds.")
         return
     end
-    rprint(PlayerIndex, string.format(
+    tell(PlayerIndex, string.format(
         "K: %s  D: %s  A: %s  C: %s  -  KDA %s",
         s.kills or "0", s.deaths or "0", s.assists or "0",
         s.captures or "0", s.kda or "0.0"))
@@ -231,15 +239,15 @@ end
 local function show_board(PlayerIndex, path, header, sort_metric_field)
     local rows = read_leaderboard(path)
     if not rows or #rows == 0 then
-        rprint(PlayerIndex, "Leaderboard not ready yet.")
+        tell(PlayerIndex, "Leaderboard not ready yet.")
         return
     end
-    rprint(PlayerIndex, "--- " .. header .. " ---")
+    tell(PlayerIndex, "--- " .. header .. " ---")
     local shown = 0
     for _, r in ipairs(rows) do
         if shown >= TOP_SHOW_N then break end
         local metric = r[sort_metric_field] or "0"
-        rprint(PlayerIndex, string.format("#%s  %s  -  %s %s  (K%s/D%s/A%s/C%s)",
+        tell(PlayerIndex, string.format("#%s  %s  -  %s %s  (K%s/D%s/A%s/C%s)",
             r.rank, r.name or "?", sort_metric_field:upper(), metric,
             r.kills or "0", r.deaths or "0", r.assists or "0", r.captures or "0"))
         shown = shown + 1
@@ -251,7 +259,7 @@ local function cmd_top(PlayerIndex)
 end
 
 local function cmd_fragger(PlayerIndex)
-    show_board(PlayerIndex, LEADERBOARD_PATH, "Top Fraggers", "kda")
+    show_board(PlayerIndex, FRAGGERS_PATH, "Top Fraggers", "kills")
 end
 
 local function cmd_capper(PlayerIndex)
@@ -262,11 +270,20 @@ local function cmd_rank(PlayerIndex)
     local ip = strip_port(get_var(PlayerIndex, "$ip"))
     local s = read_player_stats(ip)
     if not s or not s.rank then
-        rprint(PlayerIndex, "No rank yet. Play a few rounds.")
+        tell(PlayerIndex, "No rank yet. Play a few rounds.")
         return
     end
-    rprint(PlayerIndex, string.format("Your rank: %s / %s  -  KDA %s",
+    tell(PlayerIndex, string.format("Your rank: %s / %s  -  KDA %s",
         s.rank, s.total or "?", s.kda or "0.0"))
+end
+
+local function cmd_commands(PlayerIndex)
+    tell(PlayerIndex, "--- Stats commands ---")
+    tell(PlayerIndex, "/stats   - your own K/D/A/captures and KDA")
+    tell(PlayerIndex, "/top     - top 5 by KDA")
+    tell(PlayerIndex, "/fragger - top 5 by raw kills")
+    tell(PlayerIndex, "/capper  - top 5 by flag captures")
+    tell(PlayerIndex, "/rank    - your rank vs all tracked players")
 end
 
 function OnChat(PlayerIndex, Message, Type)
@@ -286,6 +303,9 @@ function OnChat(PlayerIndex, Message, Type)
         return false
     elseif msg == "/rank" or msg == "rank" then
         cmd_rank(PlayerIndex)
+        return false
+    elseif msg == "/commands" or msg == "commands" or msg == "/help" or msg == "help" then
+        cmd_commands(PlayerIndex)
         return false
     end
 end
