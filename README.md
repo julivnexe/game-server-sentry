@@ -4,11 +4,13 @@ A full-stack operations toolkit for a self-hosted Halo Custom Edition dedicated 
 
 One repo, one VPS, no SaaS, no paid frontend. What you get:
 
-- 🛡️ **Layered DDoS defense** — kernel hardening, per-source rate limits, public reputation feeds (FireHOL/Spamhaus), auto-banned attacker subnets via a Prometheus-driven trigger.
-- 📣 **Discord notifications** — player joins/leaves with country flag + VPN detection, in-game command snitching, traffic spike alerts, watched-service crash/recovery.
+- 🛡️ **Layered DDoS defense** — kernel hardening, per-source + port-wide rate limits, amplification-reflector source-port blocks, public reputation feeds (FireHOL/Spamhaus), and **two auto-ban timers** that promote SAPP DOS_ATTACK detections and rate-limit offenders into a persistent ipset (survives reboot via `ipset-persistent`).
+- 📣 **Discord notifications** — player joins/leaves with country flag + VPN detection, in-game command snitching, traffic spike alerts, match-end MVP/top-fragger summaries, auto-ban alerts, live server-status pinned embed.
 - 📊 **Prometheus + Grafana** stack auto-provisioned for dashboards and metrics.
-- 🎯 **Stat tracker with KDA leaderboard** — per-IP kills/deaths/assists/captures, in-game `/stats`/`/top`/`/fragger`/`/capper`/`/rank` commands, mirrored to Discord slash commands. VPN-flagged IPs are logged but excluded from the public leaderboard.
-- 🎮 **SAPP Lua scripts** — drop-in scripts that wire all the event hooks into the bot's CSV protocol.
+- 🎯 **Stat tracker with KDA leaderboard** — per-IP kills/deaths/assists/captures, in-game `/stats` `/top` `/fragger` `/capper` `/rank` `/commands`, mirrored to Discord slash commands. `/fragger` ranks by raw kills, `/top` by KDA — different orderings on purpose.
+- 🎯 **Server-side hit-registration fix** — `lagcomp_v3.lua` keeps a 500ms ring buffer of every player's position/aim/crouch and re-classifies damage events using the shooter's ping-rewound view. When the engine calls a shot a body hit but the rewind says it was a headshot, the damage is boosted in-flight (4× for sniper-class, 2× for pistol/AR). Body-shots that "felt like" headshots from the shooter's POV now register correctly.
+- 🛠 **Admin slash commands from Discord** — `/ban` `/kick` `/unban` `/map` `/restart` driven from your phone, role-gated. Bot writes to a SAPP command queue the in-game script drains every second.
+- 🎮 **SAPP Lua scripts** — `discord_notify` (events CSV), `stats_tracker` (KDA), `lagcomp_v3` (hit reg), `halo_extras` (live status JSON + match summaries + admin queue).
 
 ---
 
@@ -20,14 +22,18 @@ If you run your own Halo Custom Edition dedicated server, you've probably hit at
 - You have no idea who's currently playing on your server without booting up Halo yourself and joining to check.
 - The server quietly dies at 3 AM and you find out next morning when people DM you asking why.
 - There's no scoreboard that survives between games — you can't see who the actual top players are over time.
+- Halo's stock hit registration is wonky — shots that clearly hit on your screen register as misses on the server because of network lag.
+- You're not at your PC when a griefer joins, and you have no remote way to kick them.
 
 **This project fixes all of that.** Once it's set up, your VPS will:
 
 1. **Watch for attackers and auto-block them.** When someone tries to flood your server, the firewall figures out where it's coming from and bans them for 24 hours. You don't have to do anything.
 2. **Ping your Discord every time someone joins or leaves.** With their country flag, whether they're using a VPN, and their player count. So you (and your community) actually know who's around.
 3. **Track Kills, Deaths, Assists, and Flag Captures for every player.** Stored per-IP, so people get credit even if they change names. Type `/top` in chat and you see the leaderboard. Same data is available as Discord slash commands.
-4. **Alert you when the server crashes** so you can restart it (or have it auto-restart).
-5. **Give you pretty Grafana graphs** of traffic and player counts if you want to nerd out.
+4. **Fix wonky hit registration** with a server-side lag compensation script. Shots that should have been headshots from the shooter's perspective (but registered as body shots due to network lag) get retroactively upgraded. ~10-15% of body hits in a typical session get rescued.
+5. **Moderate from anywhere** with Discord admin slash commands. `/ban`, `/kick`, `/unban`, `/map`, `/restart` — role-gated, executes on the server within 1 second. You can run a server from your phone.
+6. **Alert you when the server crashes** so you can restart it (or have it auto-restart).
+7. **Give you pretty Grafana graphs** of traffic and player counts if you want to nerd out.
 
 > **What's a VPS?** Short for "Virtual Private Server." It's just a computer you rent online — runs 24/7, has its own internet connection. Vultr, Linode, DigitalOcean, Hetzner, OVH all sell them. The cheapest tier (~$5/month, 1 CPU, 1 GB RAM) is enough for two Halo servers + everything in this repo.
 
@@ -111,9 +117,14 @@ All five containers should say `running`.
 
 ### Step 6 — Install the SAPP scripts on your Halo server
 
-Find your Halo server's SAPP lua folder (usually `cg/sapp/lua/` inside your Halo install) and drop these two files in:
-- `sapp/discord_notify.lua`
-- `sapp/stats_tracker.lua`
+Find your Halo server's SAPP lua folder (usually `cg/sapp/lua/` inside your Halo install) and drop these four files in:
+
+| File | What it does |
+|---|---|
+| `sapp/discord_notify.lua` | Required. Writes join/leave/command events to `players.log` |
+| `sapp/stats_tracker.lua` | Required for KDA + `/stats` `/top` `/fragger` `/capper` `/rank` `/commands` chat commands |
+| `sapp/lagcomp_v3.lua` | Optional but recommended. Server-side hit registration fix |
+| `sapp/halo_extras.lua` | Optional. Live server status JSON + match-end summaries + admin command queue (used by the Discord bot's `/ban` `/kick` etc.) |
 
 Open each one in a text editor and find the line near the top:
 ```lua
@@ -125,6 +136,8 @@ Then add these lines to your Halo server's `cg/sapp/init.txt`:
 ```
 lua_load discord_notify
 lua_load stats_tracker
+lua_load lagcomp_v3
+lua_load halo_extras
 ```
 
 Restart your Halo server.
@@ -254,25 +267,39 @@ See [`firewall/README.md`](firewall/README.md) for the full DDoS-hardening recip
 
 | Command | What it shows |
 |---|---|
-| `/stats`   | The caller's own K / D / A / C and KDA |
-| `/top`     | Top 5 players by KDA (alias of `/fragger`) |
-| `/fragger` | Top 5 players by KDA |
-| `/capper`  | Top 5 players by flag captures |
-| `/rank`    | The caller's rank among all tracked players |
+| `/stats`    | The caller's own K / D / A / C and KDA |
+| `/top`      | Top 5 by **KDA** (overall skill — kills/(deaths+assists)) |
+| `/fragger`  | Top 5 by **raw kill count** (different ordering from `/top`) |
+| `/capper`   | Top 5 by flag captures |
+| `/rank`     | The caller's rank among all tracked players |
+| `/commands` | This list |
 
-### Discord commands
+Responses appear in chat (persist ~10s), not the 1-second console overlay.
+
+### Discord slash commands
 
 The same data is exposed via Discord slash commands posted by the bot:
 
 | Slash | What it shows |
 |---|---|
-| `/stats <player>` | K/D/A/C and KDA for the named player (or yourself if linked) |
-| `/top`            | Top 5 by KDA, posted as a Discord embed |
-| `/fragger`        | Alias of `/top` |
+| `/stats <player>` | K/D/A/C and KDA for the named player |
+| `/top`            | Top 5 by KDA |
+| `/fragger`        | Top 5 by raw kills |
 | `/capper`         | Top 5 by captures |
 | `/rank <player>`  | Rank for the named player |
+| `/commands`       | This list |
 
-The SQLite DB is shared between in-game and Discord paths — there's only one source of truth.
+### Admin slash commands (role-gated)
+
+| Slash | What it does |
+|---|---|
+| `/ban <player>`            | IP + CD-key ban (1-day default) |
+| `/kick <player>`           | Boot from server |
+| `/unban <ip>`              | Undo a ban |
+| `/map <name> <gametype>`   | Switch to a different map |
+| `/restart`                 | Reset current match |
+
+The bot writes the command to `/opt/halo-monitor/sapp_command_queue.txt`. `halo_extras.lua` drains the queue every second and runs each line via `execute_command()`. Set `ADMIN_ROLE_ID` in `bot.env` to enable — without it, the commands refuse with "Admin role required" so randos can't run them.
 
 ### VPN posture
 
@@ -285,12 +312,26 @@ On first sight of a new IP, the bot queries [ProxyCheck.io](https://proxycheck.i
 | Layer | Tool | What it catches |
 |---|---|---|
 | 1 | kernel sysctl (`tcp_syncookies=1`, `rp_filter=2`) | Spoofed-source amplification floods |
-| 2 | iptables INPUT chain | Specific bad IPs, per-source-IP rate limit, per-port rate limit |
-| 3 | ipset `halo-banlist` | Auto-banned attacker subnets (24h TTL) populated by `auto-banner` from live PPS spikes |
-| 4 | ipset `halo-reputation` | Known-malicious IPs from FireHOL Level 1 + Spamhaus DROP/EDROP (~4.6K CIDRs, daily refresh) |
-| 5 | ipset `halo-allowlist` | Verified players from `players.log` (bypass rate limits) |
+| 2 | iptables: amplification-reflector source-port DROP (UDP src 19/53/123/161/389/1900/5353/11211) | Chargen/DNS/NTP/SNMP/LDAP/SSDP/mDNS/memcached reflection attacks |
+| 3 | iptables: tiny-UDP DROP (`length 0:15` on game ports) | Empty/tiny UDP floods that aren't real Halo packets |
+| 4 | ipset `halo-geo-allow` ACCEPT (before banlist DROP) | Verified players' rules win over false-positive bans |
+| 5 | ipset `halo-banlist` DROP | Auto-banned attacker IPs/subnets, 24h–7d TTL |
+| 6 | ipset `halo-reputation` DROP (excl. loopback) | Known-malicious IPs from FireHOL Level 1 + Spamhaus DROP/EDROP (~4.6K CIDRs) |
+| 7 | iptables hashlimit per-source (60/sec/IP) | Single-source flood |
+| 8 | iptables hashlimit per-port (400/sec) | Aggregate flood across many sources |
+| 9 | INPUT default DROP | Catch-all for anything not explicitly accepted |
+
+**Two auto-ban timers** keep the banlist fresh:
+- `sapp-ipban-sync.timer` (every 60s) — reads SAPP's UTF-16 logs for DOS_ATTACK detections, promotes to `halo-banlist` with 7-day TTL, cross-checks `halo-geo-allow` so verified players aren't false-banned
+- `ratelimit-autoban.timer` (every 30s) — reads conntrack for sources with >200 game-port flows, auto-bans
+
+Persistence via `ipset-persistent` + `netfilter-persistent` — both the iptables rules AND the ipset contents survive reboot.
 
 Single-VPS realistic ceiling: ~5–10 Gbps. Beyond that, you need upstream filtering (your hosting provider's DDoS protection appliance — see [`docs/UPSTREAM.md`](docs/UPSTREAM.md)).
+
+### Admin path fallback: Tailscale
+
+During a sustained attack, your hosting provider's edge filter may null-route admin SSH from your home IP while UDP game traffic keeps flowing. Recommended fallback: install Tailscale on the VPS — gives the box a `100.x.y.z` overlay address reachable from any device on the same tailnet, completely bypassing the public-internet block.
 
 ---
 
