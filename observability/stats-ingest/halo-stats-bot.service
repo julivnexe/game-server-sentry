@@ -1,0 +1,16 @@
+[Unit]
+Description=Halo CE Command Center — Discord stats bot (slash commands)
+After=network-online.target halo-stats.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/opt/halo-monitor/bot.env
+ExecStart=/opt/halo-monitor/bot-venv/bin/python /opt/halo-monitor/discord_stats_bot.py
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,14 @@
+[Unit]
+Description=Halo CE Command Center — stats ingest (events.log → leaderboard)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/halo-monitor/stats_ingest.py
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
