@@ -28,6 +28,14 @@ local APPLY_UPGRADES  = true    -- PHASE 2: top up body→head when rewind disag
 local HEADSHOT_MULT_BIG   = 4.0   -- sniper-class weapons
 local HEADSHOT_MULT_SMALL = 2.0   -- pistol / AR / plasma / etc.
 local BIG_WEAPON_THRESHOLD = 80   -- damage >= this is treated as sniper-class
+
+-- High-ping caution: the rewind math is less reliable at higher pings
+-- because a larger time window means the victim could have changed
+-- direction between our ring-buffer samples. We still LOG every rewind
+-- decision up to MAX_PING_MS (250) for analysis, but only actually
+-- APPLY the damage boost when ping is <= this. Cases just above this
+-- get logged as "UPGRADE skipped: ping too high".
+local UPGRADE_MAX_PING_MS = 150
 local TICK_RATE       = 30
 -- =====================
 
@@ -252,12 +260,22 @@ function OnDamage(victim, killer, meta_id, damage, hit_string, backtap)
     ))
 
     if APPLY_UPGRADES and upgrade then
+        -- High-ping caution: rewind reliability degrades with the time
+        -- window. Log the would-be upgrade but pass the damage through
+        -- unchanged so we don't credit phantom kills to laggy shooters.
+        if rtt > UPGRADE_MAX_PING_MS then
+            log_line(string.format(
+                "  UPGRADE skipped: ping=%d > cap=%d (rewind too uncertain at this ping)",
+                rtt, UPGRADE_MAX_PING_MS))
+            return
+        end
         local d = damage or 0
         local mult = (d >= BIG_WEAPON_THRESHOLD) and HEADSHOT_MULT_BIG or HEADSHOT_MULT_SMALL
         local boosted = d * mult
-        log_line(string.format("  UPGRADE applied: damage %.2f -> %.2f (x%.1f, %s)",
+        log_line(string.format("  UPGRADE applied: damage %.2f -> %.2f (x%.1f, %s, %dms)",
             d, boosted, mult,
-            (d >= BIG_WEAPON_THRESHOLD) and "big-weapon" or "small-weapon"))
+            (d >= BIG_WEAPON_THRESHOLD) and "big-weapon" or "small-weapon",
+            rtt))
         -- SAPP EVENT_DAMAGE_APPLICATION:
         --   return false           → block damage entirely
         --   return true            → pass through unchanged
