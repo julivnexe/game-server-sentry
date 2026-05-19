@@ -153,13 +153,21 @@ local function classify_hit(shooter, victim_snap)
     if not (shooter.ai and shooter.px and victim_snap.px) then
         return nil, nil, nil, nil, nil
     end
-    local zscale = 1 - (victim_snap.crouch or 0) * (1 - CROUCH_Z_SCALE)
-    local head_z = victim_snap.pz + HEAD_CZ  * zscale
-    local body_z = victim_snap.pz + TORSO_CZ * zscale
+    local v_zscale = 1 - (victim_snap.crouch or 0) * (1 - CROUCH_Z_SCALE)
+    local head_z = victim_snap.pz + HEAD_CZ  * v_zscale
+    local body_z = victim_snap.pz + TORSO_CZ * v_zscale
 
+    -- Apply the same crouch scaling to the shooter's eye. Before this
+    -- fix, a crouched shooter aiming horizontally at a victim's torso
+    -- got their ray origin computed 25 cm too high — over 5-10 m the
+    -- ray ended up crossing head height near the victim, and body
+    -- shots from a crouched shooter were wrongly classified as
+    -- headshots → falsely upgraded → through-OS kills the user
+    -- complained about.
+    local s_zscale = 1 - (shooter.crouch or 0) * (1 - CROUCH_Z_SCALE)
     local ox = shooter.px
     local oy = shooter.py
-    local oz = shooter.pz + EYE_HEIGHT
+    local oz = shooter.pz + EYE_HEIGHT * s_zscale
     local dx, dy, dz = shooter.ai, shooter.aj, shooter.ak
 
     local head_d, head_t = miss_dist_to_point(ox, oy, oz, dx, dy, dz,
