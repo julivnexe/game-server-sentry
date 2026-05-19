@@ -187,13 +187,24 @@ def detect_iface() -> str:
 
 
 def post(payload):
+    # Retry on transient timeouts. Inbound DDoS often congests outbound enough
+    # that the first call hits the 5s timeout; a couple of retries with a
+    # longer ceiling usually gets the alert through. Total worst case ~45s.
     if not WEBHOOK_URL:
         return
-    try:
-        requests.post(WEBHOOK_URL, json=payload, timeout=5)
-    except Exception as e:
-        print(f"webhook error: {e}")
-        M_WEBHOOK_ERRORS.inc()
+    last_err = None
+    for attempt in range(3):
+        try:
+            r = requests.post(WEBHOOK_URL, json=payload, timeout=15)
+            if r.status_code < 400:
+                return
+            last_err = f"HTTP {r.status_code}"
+        except Exception as e:
+            last_err = e
+        if attempt < 2:
+            time.sleep(1 + attempt)  # 1s, 2s
+    print(f"webhook error after 3 attempts: {last_err}")
+    M_WEBHOOK_ERRORS.inc()
 
 
 def post_alert(server_name, title, desc, color, kind="generic", fields=None):

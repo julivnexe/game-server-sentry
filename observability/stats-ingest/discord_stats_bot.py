@@ -471,16 +471,28 @@ async def ddos_alert_loop():
     if BANLIST_SEEN.exists():
         seen = set(BANLIST_SEEN.read_text().split())
     while not client.is_closed():
+        # Re-resolve channel each cycle so on_ready's auto-discovery (which sets
+        # ALERT_CHAN_ID after this loop is created) takes effect immediately.
+        if channel is None and ALERT_CHAN_ID:
+            channel = client.get_channel(ALERT_CHAN_ID)
+            dry_run = channel is None
         try:
             now = current_banlist()
-            new = now - seen
-            for ip in sorted(new):
+            new = sorted(now - seen)
+            if new:
                 if dry_run:
-                    print(f"[ddos_alert] AUTO-BANNED {ip}", flush=True)
+                    for ip in new:
+                        print(f"[ddos_alert] AUTO-BANNED {ip}", flush=True)
                 else:
+                    # Batch all newly-banned IPs from this cycle into one embed
+                    # so a multi-source flood (5+ IPs in 30s) doesn't spam the
+                    # channel with 5 separate posts.
+                    lines = "\n".join(f"`{ip}`" for ip in new[:25])
+                    if len(new) > 25:
+                        lines += f"\n…and {len(new)-25} more"
                     e = discord.Embed(
-                        title="🛡  Auto-banned",
-                        description=f"`{ip}` added to halo-banlist",
+                        title=f"🛡  Auto-banned {len(new)} IP{'s' if len(new)>1 else ''}",
+                        description=lines,
                         color=0xff3344)
                     e.set_footer(text="halo-banlist • DDoS auto-mitigation")
                     await channel.send(embed=e)
@@ -492,8 +504,18 @@ async def ddos_alert_loop():
         await asyncio.sleep(BANLIST_POLL)
 
 
+def _find_channel_by_names(guild, names):
+    """Return first channel in guild whose name matches any in names."""
+    lookup = {n.lower() for n in names}
+    for ch in guild.text_channels:
+        if ch.name.lower() in lookup:
+            return ch
+    return None
+
+
 @client.event
 async def on_ready():
+    global STATUS_CHAN_ID, MATCH_CHAN_ID, ALERT_CHAN_ID
     print(f"Logged in as {client.user} ({client.user.id})", flush=True)
     total = 0
     for guild in client.guilds:
@@ -505,6 +527,26 @@ async def on_ready():
         except Exception as exc:
             print(f"  sync failed for '{guild.name}': {exc}", file=sys.stderr)
     print(f"Total commands live: {total}", flush=True)
+
+    # Channel auto-discovery: if env IDs are unset, fall back to common names
+    # so a fresh deploy stops getting stuck in dry-run silently.
+    if client.guilds:
+        g = client.guilds[0]
+        if not ALERT_CHAN_ID:
+            ch = _find_channel_by_names(g, ["logs", "alerts", "snitches"])
+            if ch:
+                ALERT_CHAN_ID = ch.id
+                print(f"  auto-discovered alerts channel: #{ch.name} ({ch.id})", flush=True)
+        if not STATUS_CHAN_ID:
+            ch = _find_channel_by_names(g, ["server-activity", "status", "live-status"])
+            if ch:
+                STATUS_CHAN_ID = ch.id
+                print(f"  auto-discovered status channel: #{ch.name} ({ch.id})", flush=True)
+        if not MATCH_CHAN_ID:
+            ch = _find_channel_by_names(g, ["server-activity", "matches", "match-history"])
+            if ch:
+                MATCH_CHAN_ID = ch.id
+                print(f"  auto-discovered match channel: #{ch.name} ({ch.id})", flush=True)
 
     # Launch the three background tasks
     asyncio.create_task(live_status_loop())
