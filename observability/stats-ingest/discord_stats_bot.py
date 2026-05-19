@@ -38,7 +38,8 @@ LEADERBOARD    = STATS_DIR / "leaderboard.txt"
 FRAGGERS       = STATS_DIR / "fraggers.txt"
 CAPPERS        = STATS_DIR / "cappers.txt"
 PLAYER_DIR     = STATS_DIR / "player"
-STATUS_FILE    = Path("/opt/halo-monitor/server_status.json")
+STATUS_DIR     = Path("/opt/halo-monitor")
+STATUS_GLOB    = "server_status_*.json"  # per-port files written by halo_extras.lua
 MATCH_LOG      = Path("/opt/halo-monitor/match_summaries.log")
 MATCH_POS_FILE = Path("/opt/halo-monitor/match_summaries.log.pos")
 STATUS_MSG_ID  = Path("/opt/halo-monitor/status_msg_id")
@@ -339,25 +340,37 @@ async def live_status_loop():
 
     while not client.is_closed():
         try:
-            if STATUS_FILE.exists():
-                data = json.loads(STATUS_FILE.read_text())
-                count = data.get("count", 0)
-                max_p = data.get("max", 16)
-                players = data.get("players", [])
-                color  = 0x33dd33 if count > 0 else 0x666666
-                lines = ([f"**{p['name']}** — K {p.get('kills',0)} / D {p.get('deaths',0)}"
-                          for p in players] or ["*nobody online*"])
+            status_files = sorted(STATUS_DIR.glob(STATUS_GLOB))
+            if status_files:
+                servers = []
+                total_count = 0
+                for f in status_files:
+                    try:
+                        servers.append(json.loads(f.read_text()))
+                        total_count += servers[-1].get("count", 0)
+                    except Exception:
+                        continue
+                color = 0x33dd33 if total_count > 0 else 0x666666
                 e = discord.Embed(
-                    title=f"{data.get('server','Server')} — {count}/{max_p}",
-                    description="\n".join(lines),
+                    title=f"Halo CE — live status ({total_count} players online)",
                     color=color)
-                e.add_field(name="Map",      value=data.get("map","?"),  inline=True)
-                e.add_field(name="Gametype", value=data.get("gt","?"),   inline=True)
-                e.set_footer(text=f"Updated {data.get('ts','?')}")
+                for data in servers:
+                    count = data.get("count", 0)
+                    max_p = data.get("max", 16)
+                    players = data.get("players", [])
+                    lines = ([f"**{p['name']}** — K {p.get('kills',0)} / D {p.get('deaths',0)}"
+                              for p in players] or ["*nobody online*"])
+                    e.add_field(
+                        name=f"{data.get('server','Server')} — {count}/{max_p} on {data.get('map','?')} / {data.get('gt','?')}",
+                        value="\n".join(lines),
+                        inline=False)
+                if servers:
+                    e.set_footer(text=f"Updated {servers[-1].get('ts','?')}")
                 if dry_run:
-                    print(f"[live_status] would-update: {data.get('server','?')} "
-                          f"{count}/{max_p} on {data.get('map','?')}/{data.get('gt','?')} — "
-                          f"players={[p.get('name') for p in players]}", flush=True)
+                    summary = " | ".join(
+                        f"{d.get('server','?')} {d.get('count',0)}/{d.get('max',16)} on {d.get('map','?')}"
+                        for d in servers)
+                    print(f"[live_status] would-update: {summary}", flush=True)
                 else:
                     await msg.edit(embed=e)
         except Exception as exc:

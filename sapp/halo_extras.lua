@@ -14,7 +14,12 @@ api_version = "1.12.0.0"
 
 -- ====== CONFIG ======
 local SERVER_NAME      = "Server 1"
-local STATUS_FILE      = "/opt/halo-monitor/server_status.json"
+-- Per-instance port. Each on-disk copy of this script is sed-patched at deploy
+-- time to set this to 2310, 2312, etc. so the two halo-server instances each
+-- write to their own /opt/halo-monitor/server_status_<port>.json file and
+-- don't race on a shared .tmp rename.
+local PORT_OVERRIDE    = 2310
+local STATUS_FILE      = "/opt/halo-monitor/server_status.json"  -- set in OnScriptLoad
 local MATCH_LOG        = "/opt/halo-monitor/match_summaries.log"
 local CMD_QUEUE        = "/opt/halo-monitor/sapp_command_queue.txt"
 local TICK_RATE        = 30
@@ -44,6 +49,7 @@ function OnScriptLoad()
     register_callback(cb["EVENT_SCORE"],              "OnScore")
     register_callback(cb["EVENT_DAMAGE_APPLICATION"], "OnDamage")
     register_callback(cb["EVENT_TICK"],               "OnTick")
+    STATUS_FILE = string.format("/opt/halo-monitor/server_status_%d.json", PORT_OVERRIDE)
     reset_match()
 end
 
@@ -175,13 +181,15 @@ local function write_status()
         '{"ts":"%s","server":"%s","map":"%s","gt":"%s","count":%d,"max":%d,"players":[%s]}',
         ts, safe(SERVER_NAME), safe(map), safe(gt), count, maxp, table.concat(players, ","))
 
-    -- Atomic write: write to .tmp, then rename
-    local tmp = STATUS_FILE .. ".tmp"
-    local f = io.open(tmp, "w")
+    -- Direct write. Previously used .tmp + os.rename for atomicity, but Wine's
+    -- Lua os.rename uses Windows MoveFile semantics that fails when the
+    -- destination exists, leaving stale .json forever. The bot's JSON reader
+    -- tolerates a partial read with try/except, so the lost atomicity is
+    -- acceptable and was anyway never a multi-writer concern post-port-split.
+    local f = io.open(STATUS_FILE, "w")
     if f then
         f:write(payload)
         f:close()
-        os.rename(tmp, STATUS_FILE)
     end
 end
 
