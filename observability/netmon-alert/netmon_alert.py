@@ -37,6 +37,10 @@ HALO_SERVERS_RAW = os.environ.get("HALO_SERVERS", "2302:Server 1:16")
 IFACE = os.environ.get("IFACE", "")
 PLAYER_LOG = os.environ.get("PLAYER_LOG", "/opt/halo-monitor/players.log")
 LOG_POS_FILE = os.environ.get("LOG_POS_FILE", "/opt/halo-monitor/players.log.pos")
+# Only consider join/leave entries newer than this when reconstructing the
+# "currently in server" set. Caps how many orphan joins (server crashes /
+# missed leaves) can accumulate into ghost player count.
+PLAYER_LOG_WINDOW_S = int(os.environ.get("PLAYER_LOG_WINDOW_S", "14400"))  # 4h
 PROXYCHECK_KEY = os.environ.get("PROXYCHECK_KEY", "").strip()
 METRICS_PORT = int(os.environ.get("METRICS_PORT", "9100"))
 
@@ -264,18 +268,22 @@ def lookup_ip_info(ip_with_port):
 
 
 def current_players_from_log(server_filter=None):
+    # Only consider entries within the last PLAYER_LOG_WINDOW_S seconds.
+    # The log accumulates orphan joins over time (server crashes / map cycles
+    # that don't fire matching leaves), so a full-history replay produces
+    # ghost players (we saw ~286 orphans against ~11K lines on this box).
+    # 4h is wider than any realistic single session.
     if not os.path.exists(PLAYER_LOG):
         return [], set()
+    cutoff = datetime.now(timezone.utc).timestamp() - PLAYER_LOG_WINDOW_S
     active = {}
     try:
         with open(PLAYER_LOG, encoding="utf-8", errors="replace") as f:
             for line in f:
                 parts = line.strip().split(",", 7)
                 if len(parts) == 8:
-                    # v1+: 8 fields with trailing schema_version
                     ts, server, action, name, ip, hsh, _extra, _ver = parts
                 elif len(parts) == 7:
-                    # legacy unversioned v1: treat as v1
                     ts, server, action, name, ip, hsh, _extra = parts
                 elif len(parts) == 6:
                     ts, server, action, name, ip, hsh = parts
@@ -284,6 +292,12 @@ def current_players_from_log(server_filter=None):
                     server = ""
                 else:
                     continue
+                try:
+                    t = datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+                    if t < cutoff:
+                        continue
+                except Exception:
+                    pass  # malformed ts — keep the line, better than dropping silently
                 if server_filter and server != server_filter:
                     continue
                 if action == "startup":
@@ -493,6 +507,7 @@ def rebuild_active_players():
     if not os.path.exists(PLAYER_LOG):
         return
     now = time.time()
+    cutoff = now - PLAYER_LOG_WINDOW_S
     try:
         with open(PLAYER_LOG, encoding="utf-8", errors="replace") as f:
             for line in f:
@@ -510,6 +525,17 @@ def rebuild_active_players():
                     extra = ""
                 else:
                     continue
+                # Skip join/leave older than the window so ghost joins from
+                # crashed/restarted sessions don't seed the active set.
+                # `state` and `startup` rows are still processed (no time gate)
+                # so _server_max gets the most-recent maxplayers value.
+                if action in ("join", "leave"):
+                    try:
+                        t = datetime.fromisoformat(_ts.replace("Z", "+00:00")).timestamp()
+                        if t < cutoff:
+                            continue
+                    except Exception:
+                        pass
                 if action == "startup":
                     for k in list(_active_players):
                         if k[0] == server:
