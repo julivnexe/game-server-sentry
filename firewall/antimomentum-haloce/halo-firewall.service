@@ -1,0 +1,36 @@
+[Unit]
+Description=Halo CE raw-table DDoS firewall (antimomentum/haloce, parameterized)
+Documentation=https://github.com/antimomentum/haloce
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+# IFACE, MASTER_IPS and ADMIN_IPS are read from this file. It MUST exist
+# and ADMIN_IPS MUST be non-empty, or halo-firewall.sh aborts by design
+# (refusing to lock you out). Create it before enabling this unit:
+#
+#   /etc/halo-firewall.conf
+#   ----------------------------------------------------------------
+#   IFACE=ens3
+#   MASTER_IPS=34.197.71.170 54.82.252.156
+#   ADMIN_IPS=<your-static-VPN-exit-ip> <second-admin-ip>
+#   ----------------------------------------------------------------
+EnvironmentFile=/etc/halo-firewall.conf
+
+# The script seeds ADMIN_IPS into WHITELIST before loading any DROP rule,
+# so enabling this on boot is safe-by-construction. On the FIRST install,
+# still run it by hand with a web console open as a fallback.
+ExecStart=/usr/local/sbin/halo-firewall.sh
+
+# Tear the firewall back down on stop (Augie's flusher; install it as
+# /usr/local/sbin/halo-flush.sh — see README).
+ExecStop=/usr/local/sbin/halo-flush.sh
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
