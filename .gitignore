@@ -23,6 +23,9 @@ Thumbs.db
 # Backups
 *.bak
 *.bak.*
+# Disaster-recovery tarballs from decoy/origin — contain WireGuard private
+# keys, Discord webhooks, bot tokens. NEVER commit.
+backups/
 
 # Claude Code session state
 .claude/
