@@ -307,7 +307,11 @@ def current_players_from_log(server_filter=None):
                     continue
                 if action not in ("join", "leave"):
                     continue
-                key = (server, name, hsh)
+                # Dedupe by hash, not name — players change names mid-session
+                # (VPN clients especially) and the leave only carries the current
+                # name; the old (server,name,hash) key would orphan otherwise.
+                # Fall back to name if hash is empty (rare; usually pirated CD-keys).
+                key = (server, hsh) if hsh else (server, name, "")
                 if action == "join":
                     active[key] = {"name": name, "ip": ip}
                 elif action == "leave":
@@ -392,8 +396,10 @@ def set_log_pos(pos: int):
 
 
 def post_join_leave(server, action, name, ip_with_port=None, returning=False):
-    names, _ = current_players_from_log(server_filter=server)
-    count = len(names)
+    # Count from in-memory _active_players (kept honest by ghost-prune) rather
+    # than re-replaying the log, which would include orphan joins from missed
+    # EVENT_LEAVEs and inflate the count past sv_maxplayers.
+    count = sum(1 for key in _active_players if key[0] == server)
     M_PLAYERS.labels(server=server).set(count)
     if action == "join":
         title, color = "🟢 Player joined", 3066993
@@ -493,7 +499,8 @@ def reconcile_active_players(seen_ips_per_server, now):
         meta = _active_players[key]
         age = now - meta.get("last_seen", now)
         if age > GHOST_TIMEOUT_SEC:
-            server, name, hsh = key
+            server = key[0]
+            name = meta.get("name", "")
             ip = meta.get("ip", "")
             print(f"[ghost-prune] {server}/{name} (ip={ip}) silent for "
                   f"{age:.0f}s — synthesizing leave")
@@ -555,16 +562,47 @@ def rebuild_active_players():
                 ip_clean = (ip or "").split(":", 1)[0]
                 if action == "join" and ip_clean:
                     _seen_ips.add(ip_clean)
-                key = (server, name, hsh)
+                key = (server, hsh) if hsh else (server, name, "")
                 if action == "join":
                     # Seed last_seen with `now` so ghosts from the log get one
                     # full GHOST_TIMEOUT_SEC window to prove they're still real
                     # via ss output before we prune them.
-                    _active_players[key] = {"ip": ip or "", "last_seen": now}
+                    _active_players[key] = {"ip": ip or "", "last_seen": now,
+                                            "name": name}
                 elif action == "leave":
                     _active_players.pop(key, None)
     except Exception as e:
         print(f"rebuild_active_players error: {e}")
+
+    # Silently prune any replayed-as-active player whose IP isn't actually in
+    # ss output. These are ghosts from missed EVENT_LEAVEs; the normal prune
+    # would synthesize a "left" Discord post for each, which spams the channel
+    # whenever the service restarts. Quietly drop them instead, then resync
+    # the gauge for each server (current_players_from_log doesn't see this).
+    try:
+        before = len(_active_players)
+        live_ips = set()
+        for port in SERVER_PORT.values():
+            live_ips |= conntrack_unique_ips(port)
+        # 0.0.0.0 is the bind address ss reports for the listener; never a
+        # real player. Drop it so it can't accidentally protect a ghost.
+        live_ips.discard("0.0.0.0")
+        for key in list(_active_players.keys()):
+            meta = _active_players[key]
+            player_ip = (meta.get("ip") or "").split(":", 1)[0]
+            if player_ip and player_ip not in live_ips:
+                _active_players.pop(key, None)
+        # Recount per server from in-memory state and set gauge.
+        per_server: dict = {}
+        for key in _active_players:
+            srv = key[0]
+            per_server[srv] = per_server.get(srv, 0) + 1
+        for srv in SERVER_PORT.keys():
+            M_PLAYERS.labels(server=srv).set(per_server.get(srv, 0))
+        print(f"[rebuild-prune] {before} → {len(_active_players)} active "
+              f"(live_ips={sorted(live_ips) or 'none'}, per_server={per_server})")
+    except Exception as e:
+        print(f"[rebuild-prune] error: {e}")
 
 
 def process_new_log_entries():
@@ -611,15 +649,20 @@ def process_new_log_entries():
                     continue
                 if action not in ("join", "leave"):
                     continue
-                key = (server, name, hsh)
+                key = (server, hsh) if hsh else (server, name, "")
                 ip_clean = (ip or "").split(":", 1)[0]
                 if action == "join":
                     if key in _active_players:
+                        # Same player reconnecting — refresh, don't double-post
+                        _active_players[key]["ip"] = ip or ""
+                        _active_players[key]["last_seen"] = time.time()
+                        _active_players[key]["name"] = name
                         continue
                     returning = bool(ip_clean) and ip_clean in _seen_ips
                     if ip_clean:
                         _seen_ips.add(ip_clean)
-                    _active_players[key] = {"ip": ip or "", "last_seen": time.time()}
+                    _active_players[key] = {"ip": ip or "", "last_seen": time.time(),
+                                            "name": name}
                     post_join_leave(server, "join", name, ip,
                                     returning=returning)
                 else:
